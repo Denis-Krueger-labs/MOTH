@@ -32,6 +32,7 @@ MOTH currently supports:
 
 * FastAPI HTTP API
 * Pydantic request validation
+* official FAUST 2026 flag-format validation
 * encrypted local flag storage
 * keyed duplicate detection
 * local duplicate suppression
@@ -45,11 +46,13 @@ MOTH currently supports:
 * pytest-based automated testing
 * disposable temporary databases during tests
 * full localhost end-to-end testing with a fake gameserver
+* retry-safe HTTP 502 handling
+* retry-safe HTTP 504 handling
 
 Current automated test status:
 
 ```text
-19 passed
+23 passed
 ```
 
 The complete local path has also been manually tested:
@@ -57,9 +60,7 @@ The complete local path has also been manually tested:
 ```text
 HTTP request
     ↓
-FastAPI
-    ↓
-validation
+FAUST flag validation
     ↓
 duplicate check
     ↓
@@ -75,6 +76,8 @@ HTTP response
 ```
 
 A second submission of the same flag is detected locally and does not reach the gameserver again.
+
+Malformed flags are rejected before MOTH attempts a network connection.
 
 ---
 
@@ -100,7 +103,8 @@ flowchart LR
     B[Operator] --> M
     C[Another Tool] --> M
 
-    M --> D[Local Duplicate Check]
+    M --> V[Flag Validation]
+    V --> D[Local Duplicate Check]
     D --> S[TCP Submitter]
     S --> G[Gameserver]
 
@@ -152,7 +156,7 @@ Example request:
 
 ```json
 {
-  "flag": "FAUST_EXAMPLE_FLAG",
+  "flag": "FAUST_AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
   "service": "example-service",
   "source": "exploit-script"
 }
@@ -162,17 +166,68 @@ Example request:
 
 ---
 
-## Flag Processing
+## FAUST Flag Validation
 
 ```text
 ⁺‧₊˚ ཐི⋆♱⋆ཋྀ ˚₊‧⁺
 ```
 
+MOTH validates incoming flags before duplicate checks or network submission.
+
+The current FAUST 2026 format is:
+
+```text
+FAUST_[A-Za-z0-9/+]{32}
+```
+
+This means a flag must:
+
+* start with `FAUST_`
+* contain exactly 32 characters after the prefix
+* contain only letters, digits, `/`, or `+` after the prefix
+
+MOTH uses a full regular-expression match so additional data before or after the flag is rejected.
+
+Example valid shape:
+
+```text
+FAUST_AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA
+```
+
+Example rejected shapes:
+
+```text
+FAUST_TOO_SHORT
+MOTH_AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA
+FAUST_AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA!
+```
+
+Invalid flags are rejected by Pydantic with HTTP `422`.
+
+They never reach the TCP submission layer.
+
+```mermaid
+flowchart TD
+    A[Incoming Flag] --> B{Valid FAUST Format?}
+
+    B -->|No| C[HTTP 422]
+    B -->|Yes| D[Duplicate Check]
+
+    C --> E[No TCP Connection]
+    D --> F[Continue Processing]
+```
+
+Mof has standards now.
+
+---
+
+## Flag Processing
+
 A new flag currently moves through MOTH like this:
 
 ```mermaid
 flowchart TD
-    A[Receive flag] --> B[Validate input]
+    A[Receive flag] --> B[Validate FAUST format]
     B --> C[Calculate keyed fingerprint]
     C --> D{Already stored?}
 
@@ -332,8 +387,6 @@ MORI does not submit flags.
 
 MORI watches the nest.
 
-The security boundary remains simple:
-
 ```mermaid
 flowchart LR
     CLIENT[Team Client]
@@ -457,7 +510,13 @@ New species of lämp require observation before classification.
 
 ### Connection could not be established
 
-Example internal error:
+Possible internal errors include:
+
+```text
+mof flew toward the lämp, but there was no lämp
+```
+
+or:
 
 ```text
 mof flew toward the lämp, but could not find it
@@ -470,6 +529,10 @@ HTTP 502 Bad Gateway
 ```
 
 The flag is not remembered.
+
+This has been manually verified end to end.
+
+After a `502`, restarting the fake gameserver and submitting the same flag again successfully sends the flag.
 
 ---
 
@@ -488,6 +551,10 @@ HTTP 504 Gateway Timeout
 ```
 
 The flag is not remembered.
+
+This has also been manually verified end to end.
+
+After a `504`, replacing the silent server with a working fake gameserver and submitting the same flag again succeeds.
 
 ---
 
@@ -621,6 +688,10 @@ pytest -v
 The current suite covers:
 
 * empty flag rejection
+* valid FAUST flag acceptance
+* short malformed flag rejection
+* incorrect flag prefix rejection
+* invalid flag character rejection
 * duplicate detection
 * keyed flag memory checks
 * absence of plaintext flags in SQLite
@@ -644,7 +715,7 @@ The current suite covers:
 Current status:
 
 ```text
-19 passed
+23 passed
 ```
 
 ---
@@ -677,11 +748,9 @@ When the test finishes, pytest cleans up the temporary nest.
 
 ---
 
-## Manual End-to-End Test
+## Manual End-to-End Testing
 
-MOTH has been manually tested against a local fake gameserver.
-
-The test used three independent processes:
+MOTH has been manually tested against local fake gameservers.
 
 ```mermaid
 flowchart LR
@@ -694,31 +763,59 @@ flowchart LR
     PS -->|HTTP POST| API
     API --> TCP
     TCP -->|TCP flag submission| FAKE
-    FAKE -->|OK accepted| TCP
+    FAKE -->|Response| TCP
     TCP --> API
     API --> DB
     API --> PS
 ```
 
-The fake gameserver received:
+### Successful submission
+
+A valid-shaped flag was submitted through the entire stack.
+
+The fake gameserver received it and returned `OK`.
+
+MOTH remembered the flag.
+
+Submitting the same flag again returned a local duplicate without another TCP submission.
+
+### Missing gameserver
+
+A fresh flag was submitted while the fake gameserver was offline.
+
+MOTH returned HTTP `502`.
+
+After restarting the gameserver, submitting the same flag succeeded.
+
+The failed attempt had not been remembered.
+
+### Silent gameserver
+
+A fake gameserver accepted the TCP connection but deliberately stopped responding.
+
+MOTH returned HTTP `504`.
+
+After replacing it with the normal fake gameserver, submitting the same flag succeeded.
+
+The timed-out attempt had not been remembered.
+
+### Invalid flag
+
+The old development flag:
 
 ```text
 FAUST_END_TO_END_MOF_001
 ```
 
-MOTH returned a successful submission result and remembered the flag.
+was submitted after strict flag validation was introduced.
 
-Submitting the same flag again returned:
+MOTH rejected it before networking with:
 
 ```text
-duplicate
-LOCAL
-mof has already seen this offering
+mof does not recognize this as a FAUST flag
 ```
 
-The duplicate did not reach the fake gameserver a second time.
-
-This verifies the complete local execution path rather than only isolated unit behavior.
+A correctly shaped flag was then accepted and submitted normally.
 
 ```text
 ཐིཋྀ
@@ -819,6 +916,8 @@ API authentication has not yet been implemented.
 
 MOTH should therefore not currently be exposed directly to an untrusted network.
 
+That is the next major security boundary to add.
+
 ---
 
 ## Nest Residents
@@ -845,37 +944,45 @@ MORI is watching.
 
 ## Planned Work
 
-The immediate roadmap is intentionally incremental.
-
 ```mermaid
 flowchart TD
-    A[Encrypted Storage] --> B[Duplicate Detection]
-    B --> C[TCP Submission]
-    C --> D[Failure Handling]
-    D --> E[API Integration]
-    E --> F[API Failure End-to-End Tests]
-    F --> G[FAUST Flag Format Validation]
-    G --> H[API Authentication]
-    H --> I[Submission State and Retry Queue]
-    I --> J[Operational Dashboard]
+    A[Encrypted Storage ✓]
+    B[Duplicate Detection ✓]
+    C[TCP Submission ✓]
+    D[Failure Handling ✓]
+    E[API Integration ✓]
+    F[API Failure End-to-End Tests ✓]
+    G[FAUST Flag Validation ✓]
+    H[API Authentication]
+    I[Submission State and Retry Queue]
+    J[Operational Dashboard]
+
+    A --> B
+    B --> C
+    C --> D
+    D --> E
+    E --> F
+    F --> G
+    G --> H
+    H --> I
+    I --> J
 ```
 
 ### Near Term
 
 Planned next steps include:
 
-* manually test HTTP 502 behavior through FastAPI
-* manually test HTTP 504 behavior through FastAPI
-* verify failed submissions remain retryable
-* validate the actual FAUST flag format
 * add client authentication with `MOTH_API_TOKEN`
-* separate authentication secrets from database encryption secrets
+* keep the API token separate from `MOTH_DB_KEY`
+* test authenticated and unauthenticated API requests
+* reject invalid credentials before flag processing
+* add persistent submission state
+* design retry behavior
 
 ### Later
 
 Possible later additions include:
 
-* persistent submission status
 * retry queue
 * timestamps
 * submission history
@@ -917,6 +1024,8 @@ mof learned when to stop staring at the lämp
 mof learned the difference between silence and absence
 mof learned where the lämp lives
 mof learned to check the nest first
+mof carried her first flag through the whole nest
+mof learned what a real flag looks like
 ```
 
 More incidents are expected.
