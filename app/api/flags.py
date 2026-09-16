@@ -1,5 +1,5 @@
 from fastapi import APIRouter
-from pydantic import BaseModel
+from pydantic import BaseModel, Field, field_validator
 
 
 router = APIRouter(
@@ -9,9 +9,19 @@ router = APIRouter(
 
 
 class FlagSubmission(BaseModel):
-    flag: str
+    flag: str = Field(min_length=1, max_length=512)
     service: str | None = None
     source: str | None = None
+
+    @field_validator("flag")
+    @classmethod
+    def clean_flag(cls, value: str) -> str:
+        value = value.strip()
+
+        if not value:
+            raise ValueError("mof refuses to carry an empty flag")
+
+        return value
 
 
 @router.post("/flags")
