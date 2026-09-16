@@ -1,6 +1,8 @@
 from fastapi import APIRouter
 from pydantic import BaseModel, Field, field_validator
 
+from app.db.database import store_flag
+
 
 router = APIRouter(
     prefix="/api",
@@ -26,10 +28,15 @@ class FlagSubmission(BaseModel):
 
 @router.post("/flags")
 async def submit_flag(submission: FlagSubmission):
+    stored = store_flag(submission.flag)
+
+    if not stored:
+        return {
+            "status": "duplicate",
+            "message": "mof has already seen this offering",
+        }
+
     return {
-        "status": "received",
-        "flag": submission.flag,
-        "service": submission.service,
-        "source": submission.source,
-        "message": "mof acquired a suspicious string",
+        "status": "stored",
+        "message": "mof carried the flag into the nest",
     }
