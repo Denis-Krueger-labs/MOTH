@@ -18,3 +18,12 @@ def test_mof_remembers_duplicate_flag(test_database):
 
     assert first_offering is True
     assert second_offering is False
+
+def test_mof_never_stores_plaintext(test_database):
+    flag = "FAUST_SECRET_MOF_789"
+
+    store_flag(flag)
+
+    database_bytes = test_database.read_bytes()
+
+    assert flag.encode("utf-8") not in database_bytes
