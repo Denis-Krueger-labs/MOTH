@@ -1,7 +1,9 @@
-import pytest
 import asyncio
-from app.core.submitter import parse_submission_response
+
+import pytest
+
 from app.core import submitter
+from app.core.submitter import parse_submission_response
 
 
 def test_mof_understands_submission_response():
@@ -75,3 +77,27 @@ def test_mof_submits_flag_over_fake_tcp(monkeypatch):
     assert result.flag == "FAUST_TEST_MOF_123"
     assert result.code == "OK"
     assert result.message == "accepted"
+
+
+def test_mof_gives_up_when_the_lamp_never_answers(monkeypatch):
+    async def fake_open_connection(host: str, port: int):
+        await asyncio.sleep(1)
+
+    monkeypatch.setattr(
+        submitter.asyncio,
+        "open_connection",
+        fake_open_connection,
+    )
+
+    with pytest.raises(
+        TimeoutError,
+        match="mof waited for the lämp",
+    ):
+        asyncio.run(
+            submitter.submit_flag(
+                "FAUST_TEST_MOF_123",
+                host="fake.gameserver",
+                port=666,
+                timeout=0.01,
+            )
+        )

@@ -33,26 +33,45 @@ async def submit_flag(
     flag: str,
     host: str,
     port: int,
+    timeout: float = 5.0,
 ) -> SubmissionResult:
-    reader, writer = await asyncio.open_connection(
-        host,
-        port,
-    )
+    writer: asyncio.StreamWriter | None = None
 
     try:
-        await reader.readuntil(b"\n\n")
+        async with asyncio.timeout(timeout):
+            reader, writer = await asyncio.open_connection(
+                host,
+                port,
+            )
 
-        writer.write(
-            f"{flag}\n".encode("utf-8")
-        )
-        await writer.drain()
+            await reader.readuntil(b"\n\n")
 
-        response = await reader.readline()
+            writer.write(
+                f"{flag}\n".encode("utf-8")
+            )
+            await writer.drain()
 
-        return parse_submission_response(
-            response.decode("utf-8")
-        )
+            response = await reader.readline()
+
+            if not response:
+                raise ConnectionError(
+                    "mof lost the gameserver before it answered"
+                )
+
+            return parse_submission_response(
+                response.decode("utf-8")
+            )
+
+    except TimeoutError as exc:
+        raise TimeoutError(
+            "mof waited for the lämp, but it never answered"
+        ) from exc
 
     finally:
-        writer.close()
-        await writer.wait_closed()
+        if writer is not None:
+            writer.close()
+
+            try:
+                await writer.wait_closed()
+            except (ConnectionError, OSError):
+                pass
