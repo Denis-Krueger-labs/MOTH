@@ -14,6 +14,13 @@ from app.core.submitter import (
 from app.db.database import has_flag, store_flag
 
 
+VALID_FLAG = "FAUST_" + ("A" * 32)
+SECOND_VALID_FLAG = "FAUST_" + ("B" * 32)
+THIRD_VALID_FLAG = "FAUST_" + ("C" * 32)
+FOURTH_VALID_FLAG = "FAUST_" + ("D" * 32)
+FIFTH_VALID_FLAG = "FAUST_" + ("E" * 32)
+
+
 def test_mof_refuses_empty_flag():
     with pytest.raises(ValidationError):
         FlagSubmission(
@@ -21,10 +28,48 @@ def test_mof_refuses_empty_flag():
         )
 
 
+def test_mof_accepts_real_faust_flag_shape():
+    submission = FlagSubmission(
+        flag=VALID_FLAG,
+    )
+
+    assert submission.flag == VALID_FLAG
+
+
+def test_mof_refuses_short_fake_flag():
+    with pytest.raises(
+        ValidationError,
+        match="does not recognize this as a FAUST flag",
+    ):
+        FlagSubmission(
+            flag="FAUST_TOO_SHORT",
+        )
+
+
+def test_mof_refuses_wrong_flag_prefix():
+    with pytest.raises(
+        ValidationError,
+        match="does not recognize this as a FAUST flag",
+    ):
+        FlagSubmission(
+            flag="MOTH_" + ("A" * 32),
+        )
+
+
+def test_mof_refuses_invalid_flag_character():
+    with pytest.raises(
+        ValidationError,
+        match="does not recognize this as a FAUST flag",
+    ):
+        FlagSubmission(
+            flag="FAUST_" + ("A" * 31) + "!",
+        )
+
+
 def test_mof_remembers_duplicate_flag(
     test_database,
 ):
-    flag = "FAUST_TEST_DUPLICATE_123"
+    flag = VALID_FLAG
 
     first_offering = store_flag(flag)
     second_offering = store_flag(flag)
@@ -36,7 +81,7 @@ def test_mof_remembers_duplicate_flag(
 def test_mof_knows_if_flag_was_seen(
     test_database,
 ):
-    flag = "FAUST_TEST_MEMORY_456"
+    flag = SECOND_VALID_FLAG
 
     assert has_flag(flag) is False
 
@@ -48,7 +93,7 @@ def test_mof_knows_if_flag_was_seen(
 def test_mof_never_stores_plaintext(
     test_database,
 ):
-    flag = "FAUST_SECRET_MOF_789"
+    flag = THIRD_VALID_FLAG
 
     store_flag(flag)
 
@@ -61,7 +106,7 @@ def test_mof_submits_new_flag_and_remembers_it(
     test_database,
     monkeypatch,
 ):
-    flag = "FAUST_TEST_API_123"
+    flag = VALID_FLAG
 
     async def fake_submit(
         flag: str,
@@ -122,7 +167,7 @@ def test_mof_does_not_submit_local_duplicate(
     test_database,
     monkeypatch,
 ):
-    flag = "FAUST_TEST_LOCAL_DUP_123"
+    flag = SECOND_VALID_FLAG
 
     store_flag(flag)
 
@@ -159,7 +204,7 @@ def test_mof_does_not_remember_gameserver_error(
     test_database,
     monkeypatch,
 ):
-    flag = "FAUST_TEST_ERR_123"
+    flag = THIRD_VALID_FLAG
 
     async def fake_submit(
         flag: str,
@@ -196,7 +241,7 @@ def test_mof_translates_silent_lamp_to_504(
     test_database,
     monkeypatch,
 ):
-    flag = "FAUST_TEST_TIMEOUT_123"
+    flag = FOURTH_VALID_FLAG
 
     async def fake_submit(
         flag: str,
@@ -231,7 +276,7 @@ def test_mof_translates_missing_lamp_to_502(
     test_database,
     monkeypatch,
 ):
-    flag = "FAUST_TEST_CONNECTION_123"
+    flag = FIFTH_VALID_FLAG
 
     async def fake_submit(
         flag: str,

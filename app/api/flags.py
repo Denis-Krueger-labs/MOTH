@@ -1,3 +1,5 @@
+import re
+
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, Field, field_validator
 
@@ -20,6 +22,11 @@ router = APIRouter(
 )
 
 
+FAUST_FLAG_PATTERN = re.compile(
+    r"FAUST_[A-Za-z0-9/+]{32}"
+)
+
+
 TERMINAL_SUBMISSION_CODES = {
     "OK",
     "DUP",
@@ -39,12 +46,20 @@ class FlagSubmission(BaseModel):
 
     @field_validator("flag")
     @classmethod
-    def clean_flag(cls, value: str) -> str:
+    def clean_and_validate_flag(
+        cls,
+        value: str,
+    ) -> str:
         value = value.strip()
 
         if not value:
             raise ValueError(
                 "mof refuses to carry an empty flag"
+            )
+
+        if FAUST_FLAG_PATTERN.fullmatch(value) is None:
+            raise ValueError(
+                "mof does not recognize this as a FAUST flag"
             )
 
         return value
