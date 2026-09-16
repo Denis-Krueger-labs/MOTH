@@ -2,108 +2,149 @@
 
 **Multi-Operator Transmission Hub**
 
-A small centralized flag intake and submission service for attack-defense CTF teams.
+```text
+ཐི༏ཋྀ    ཐིཋྀ    ʚïɞ    ᖭི༏ᖫྀ
 
-MOTH gives exploit scripts and teammates one simple HTTP API for handing over captured flags. Mof handles validation, duplicate detection, encrypted local storage, and eventually communication with the actual CTF submission service.
+࿔‧ ֶָ֢˚˖𐦍˖˚ֶָ֢ ‧࿔
 
-Because apparently submitting flags normally was not whimsical enough.
-
-> MORI is watching the nest.
-
----
-
-## What is MOTH?
-
-During an attack-defense CTF, multiple exploit scripts and teammates may discover flags at the same time.
-
-Instead of every script having to understand the competition-specific submission protocol, everything talks to MOTH.
-
-```mermaid
-flowchart TD
-    E[Exploit Scripts]
-    T[Teammates]
-
-    E --> M
-    T --> M
-
-    M[MOTH<br/>FastAPI]
-
-    M --> V[Validation]
-    V --> D[Duplicate Detection]
-    D --> S[Encrypted Storage]
-    S --> F[FAUST Submission Service]
+⁺‧₊˚ ཐི⋆♱⋆ཋྀ ˚₊‧⁺
 ```
 
-The goal is simple:
+> A small flag relay for attack-defense CTFs, supervised by MORI and operated by one increasingly capable moth.
 
-```mermaid
-flowchart LR
-    A[Find Flag] --> B[Give Flag to Mof]
-    B --> C[Continue Causing Problems]
-```
+MOTH is a lightweight FastAPI service for receiving captured flags from multiple operators or exploit scripts, validating and deduplicating them, storing them securely, and forwarding them to a CTF submission server.
+
+The project is currently being built for FAUST CTF 2026.
+
+MOTH is intentionally small, understandable, and boring where security matters.
+
+The moth jokes are not considered part of the threat model.
 
 ---
 
 ## Current Status
 
-MOTH is currently under active development.
+```text
+𐔌՞. .՞𐦯
+```
 
-Implemented:
+MOTH currently supports:
 
-* FastAPI application
-* health endpoint
-* flag intake endpoint
-* Pydantic validation
-* whitespace cleanup
-* empty flag rejection
-* SQLite storage
-* AES-256-GCM encrypted flag storage
-* keyed HMAC fingerprints for duplicate detection
-* duplicate submission detection
-* isolated disposable test databases
-* FAUST submission response parsing
-* automated tests
+* FastAPI HTTP API
+* Pydantic request validation
+* encrypted local flag storage
+* keyed duplicate detection
+* local duplicate suppression
+* asynchronous TCP flag submission
+* FAUST-style response parsing
+* configurable submission host, port, and timeout
+* connection timeout handling
+* response timeout handling
+* connection failure handling
+* distinction between retryable and terminal submission results
+* pytest-based automated testing
+* disposable temporary databases during tests
+* full localhost end-to-end testing with a fake gameserver
 
-Not implemented yet:
+Current automated test status:
 
-* TCP connection to the FAUST submission service
-* submission queue
-* retry handling
-* API authentication
-* submission status tracking
-* statistics
-* frontend dashboard
-* excessive moth theming in the UI
+```text
+19 passed
+```
 
-The last item is considered critical infrastructure.
+The complete local path has also been manually tested:
+
+```text
+HTTP request
+    ↓
+FastAPI
+    ↓
+validation
+    ↓
+duplicate check
+    ↓
+TCP submission
+    ↓
+fake gameserver
+    ↓
+submission response
+    ↓
+encrypted storage
+    ↓
+HTTP response
+```
+
+A second submission of the same flag is detected locally and does not reach the gameserver again.
 
 ---
 
-## API
+## What MOTH Is For
 
-### Health
+During an attack-defense CTF, several people and automated exploits may discover flags at the same time.
 
-```http
-GET /api/health
+Without a central relay, every tool needs to independently handle:
+
+* submission server connections
+* duplicate detection
+* retries
+* response parsing
+* secrets
+* logging
+* submission state
+
+MOTH provides one small service between the team and the gameserver.
+
+```mermaid
+flowchart LR
+    A[Exploit Script] --> M[MOTH]
+    B[Operator] --> M
+    C[Another Tool] --> M
+
+    M --> D[Local Duplicate Check]
+    D --> S[TCP Submitter]
+    S --> G[Gameserver]
+
+    G --> S
+    S --> E[Encrypted SQLite Storage]
+    S --> M
 ```
 
-Example response:
+Exploit scripts only need to know how to send a flag to MOTH.
 
-```json
-{
-  "status": "alive",
-  "mori": "watching",
-  "moth": "awake"
-}
+Mof handles the rest.
+
+```text
+ཐི༏ཋྀ
 ```
-
-This confirms that Mof is awake and MORI is still watching the nest.
 
 ---
 
-### Submit a Flag
+## Architecture
 
-```http
+MOTH currently consists of four main pieces.
+
+```mermaid
+flowchart TB
+    API[FastAPI API]
+
+    CONFIG[Configuration]
+    DB[Encrypted SQLite Storage]
+    SUB[TCP Submitter]
+
+    API --> CONFIG
+    API --> DB
+    API --> SUB
+
+    SUB --> GS[Submission Server]
+```
+
+### API
+
+FastAPI receives flags from operators and exploit scripts.
+
+Current endpoint:
+
+```text
 POST /api/flags
 ```
 
@@ -117,61 +158,90 @@ Example request:
 }
 ```
 
-A new flag currently produces:
-
-```json
-{
-  "status": "stored",
-  "message": "mof carried the flag into the nest"
-}
-```
-
-Submitting the same flag again produces:
-
-```json
-{
-  "status": "duplicate",
-  "message": "mof has already seen this offering"
-}
-```
-
-MOTH intentionally does not echo the submitted flag back in the response.
-
-Mof does not need to yell secrets down the hallway.
+`service` and `source` are currently accepted as metadata but are not yet persisted.
 
 ---
 
-## Validation
+## Flag Processing
 
-Incoming flags are validated before they are allowed into the nest.
-
-Current behavior:
-
-* `flag` is required
-* leading and trailing whitespace is removed
-* empty or whitespace-only flags are rejected
-* flag length is limited
-* optional `service` and `source` metadata can be supplied
-
-Example of an unacceptable offering:
-
-```json
-{
-  "flag": "     "
-}
+```text
+⁺‧₊˚ ཐི⋆♱⋆ཋྀ ˚₊‧⁺
 ```
 
-Mof refuses to carry an empty flag.
+A new flag currently moves through MOTH like this:
+
+```mermaid
+flowchart TD
+    A[Receive flag] --> B[Validate input]
+    B --> C[Calculate keyed fingerprint]
+    C --> D{Already stored?}
+
+    D -->|Yes| E[Return local duplicate]
+
+    D -->|No| F[Connect to submission server]
+    F --> G[Send flag]
+    G --> H[Read response]
+    H --> I[Parse response code]
+
+    I --> J{Terminal result?}
+
+    J -->|Yes| K[Encrypt and store flag]
+    J -->|No| L[Leave flag retryable]
+
+    K --> M[Return result]
+    L --> M
+```
+
+This ordering is intentional.
+
+MOTH does not permanently remember a flag before attempting submission.
+
+If the submission server cannot be reached, the flag remains eligible for another attempt.
+
+---
+
+## Duplicate Detection
+
+MOTH does not need to decrypt every stored flag to determine whether a new flag has already been seen.
+
+Instead, every flag receives a deterministic keyed fingerprint.
+
+```mermaid
+flowchart LR
+    F[Plaintext Flag] --> H[HMAC-SHA256]
+    K[Derived Fingerprint Key] --> H
+    H --> FP[Fingerprint]
+```
+
+The fingerprint is stored in SQLite with a `UNIQUE` constraint.
+
+This allows MOTH to efficiently answer:
+
+> Have I seen this offering before?
+
+without storing the plaintext flag.
+
+Because the fingerprint uses HMAC with a secret key, a database-only attacker cannot directly perform the same offline guessing attacks that would be possible against ordinary unkeyed hashes.
 
 ---
 
 ## Encrypted Storage
 
-MOTH uses SQLite for local storage.
+```text
+ʚïɞ
+```
 
-The database does **not** store plaintext flags.
+Flags are encrypted before being written to SQLite.
 
-Instead, each flag is represented by:
+MOTH currently uses:
+
+* AES-256-GCM
+* random 12-byte nonces
+* a 256-bit master key
+* HKDF-SHA256 for key separation
+* HMAC-SHA256 for duplicate fingerprints
+
+The database stores:
 
 ```text
 id
@@ -180,148 +250,182 @@ flag_nonce
 flag_fingerprint
 ```
 
-### Encryption
+It does not intentionally store plaintext flags.
 
-Flags are encrypted using AES-256-GCM.
-
-Each encryption operation uses a fresh random nonce, meaning the same plaintext flag does not produce the same ciphertext twice.
+The plaintext absence is also covered by an automated test.
 
 ```mermaid
 flowchart LR
-    F[Plaintext Flag] --> A[AES-256-GCM]
-    A --> C[Ciphertext]
-    A --> N[Random Nonce]
+    MASTER[MOTH_DB_KEY]
+
+    MASTER --> HKDF[HKDF-SHA256]
+
+    HKDF --> ENC[Encryption Key]
+    HKDF --> FP[Fingerprint Key]
+
+    FLAG[Flag]
+
+    FLAG --> AES[AES-256-GCM]
+    ENC --> AES
+    AES --> CT[Ciphertext]
+
+    FLAG --> HMAC[HMAC-SHA256]
+    FP --> HMAC
+    HMAC --> HASH[Fingerprint]
+
+    CT --> DB[(SQLite)]
+    HASH --> DB
 ```
 
-### Duplicate Detection
+---
 
-Duplicate detection uses a keyed HMAC-SHA256 fingerprint.
+## Key Separation
+
+MOTH uses one master secret but derives separate keys for separate cryptographic purposes.
 
 ```mermaid
-flowchart LR
-    F[Flag] --> H[HMAC-SHA256]
-    K[Derived Fingerprint Key] --> H
-    H --> P[Stable Fingerprint]
+flowchart TB
+    MASTER[MOTH_DB_KEY]
+
+    MASTER --> A[HKDF]
+    MASTER --> B[HKDF]
+
+    A --> ENC[Flag Encryption Key]
+    B --> FP[Flag Fingerprint Key]
 ```
 
-The same flag always produces the same fingerprint, allowing SQLite to detect duplicates without storing the plaintext.
+The encryption key is never reused directly as the fingerprint key.
 
-A normal unkeyed SHA-256 hash is deliberately not used. A keyed fingerprint makes offline guessing harder if somebody obtains only the database.
-
-### Key Separation
-
-MOTH derives separate encryption and fingerprinting keys from the master database key using HKDF.
-
-```mermaid
-flowchart TD
-    M[MOTH_DB_KEY] --> H[HKDF]
-
-    H --> E[Encryption Key]
-    H --> F[Fingerprint Key]
-
-    E --> A[AES-256-GCM]
-    F --> S[HMAC-SHA256]
-```
-
-One secret, two different jobs, two derived keys.
-
-MORI approves.
+This prevents two unrelated cryptographic operations from sharing identical key material.
 
 ---
 
 ## Secrets
 
-MOTH currently expects the following secret:
+The database master key is provided through:
 
 ```text
 MOTH_DB_KEY
 ```
 
-It belongs in:
+It must decode to exactly 32 bytes.
 
-```text
-.env
-```
+The key belongs to the MOTH server.
 
-Example structure:
+Clients submitting flags do not need access to it.
 
-```text
-MOTH_DB_KEY=your-secret-key-here
-```
+A generated key may be stored in a local `.env` file during development.
 
-The `.env` file is excluded from Git.
+`.env` is excluded from Git.
 
-The database itself is also excluded:
-
-```text
-.env
-moth.db
-```
-
-The database key should be stored separately in a password manager or secret vault.
-
-If the database is stolen without the key, the stored flags should remain unreadable.
-
-If the key is lost, Mof also forgets how to read her own memories.
-
-Choose your disaster carefully.
+Never commit the database key.
 
 ---
 
-## Team Access
+## MORI Is Watching
 
-Teammates should **not** need `MOTH_DB_KEY`.
+```text
+/•᷅‎‎•᷄\੭
+```
 
-The intended architecture is:
+MORI does not submit flags.
+
+MORI watches the nest.
+
+The security boundary remains simple:
 
 ```mermaid
 flowchart LR
-    T[Teammate or Exploit] -->|HTTP| M[MOTH]
-    M -->|Uses MOTH_DB_KEY internally| D[(Encrypted Database)]
+    CLIENT[Team Client]
+    API[MOTH API]
+    SECRET[MOTH_DB_KEY]
+    DB[(Encrypted SQLite)]
+    GS[Submission Server]
+
+    CLIENT --> API
+    API --> DB
+    API --> GS
+    SECRET --> API
 ```
 
-A separate API authentication secret will be added later.
+Clients should never receive the database encryption key.
 
-Conceptually:
+MORI considers unnecessary secret sharing suspicious.
 
 ```text
-MOTH_API_TOKEN
+/•᷅‎‎•᷄\੭
 ```
-
-will answer:
-
-> Who is allowed to talk to Mof?
-
-while:
-
-```text
-MOTH_DB_KEY
-```
-
-answers:
-
-> Who is allowed to read Mof's memories?
-
-These are intentionally separate responsibilities.
 
 ---
 
-## FAUST Submission Protocol
+## Submission Configuration
 
-FAUST CTF uses a TCP-based flag submission protocol rather than a normal HTTP endpoint.
+The TCP submitter is configured through environment variables.
 
-MOTH will sit between team tooling and that protocol.
-
-```mermaid
-flowchart LR
-    E[Exploit Scripts] -->|HTTP| M[MOTH]
-    T[Teammates] -->|HTTP| M
-    M -->|TCP| F[FAUST Submission Service]
+```text
+MOTH_SUBMISSION_HOST
+MOTH_SUBMISSION_PORT
+MOTH_SUBMISSION_TIMEOUT
 ```
 
-MOTH already understands the structure of submission responses.
+Safe development defaults are:
 
-Known response codes include:
+```text
+MOTH_SUBMISSION_HOST=127.0.0.1
+MOTH_SUBMISSION_PORT=6666
+MOTH_SUBMISSION_TIMEOUT=5.0
+```
+
+The localhost default is deliberate.
+
+Running MOTH without submission configuration should not accidentally send anything to external infrastructure.
+
+During development, the submitter is pointed at a local fake gameserver.
+
+---
+
+## Submission Client
+
+```text
+ᖭི༏ᖫྀ
+```
+
+The submission client uses Python's asynchronous networking support.
+
+Its basic flow is:
+
+```mermaid
+sequenceDiagram
+    participant M as MOTH
+    participant G as Gameserver
+
+    M->>G: Open TCP connection
+    G-->>M: Welcome banner
+    M->>G: FLAG + newline
+    G-->>M: FLAG CODE message
+    M->>M: Parse response
+    M->>G: Close connection
+```
+
+A submission response is represented internally as:
+
+```python
+SubmissionResult(
+    flag="...",
+    code="OK",
+    message="accepted",
+)
+```
+
+MOTH validates the structure of the response separately from the meaning of the response code.
+
+Uppercase ASCII response codes are accepted structurally so that a future gameserver response code does not automatically break the parser.
+
+---
+
+## Submission Results
+
+Known terminal response codes currently include:
 
 ```text
 OK
@@ -329,25 +433,116 @@ DUP
 OWN
 OLD
 INV
+```
+
+Terminal results cause MOTH to remember the flag locally.
+
+A gameserver error such as:
+
+```text
 ERR
 ```
 
-The parser also accepts previously unknown uppercase ASCII response codes.
+does not cause the flag to be permanently remembered, allowing it to be retried later.
 
-Unknown does not mean malformed.
+Unknown response codes are also not automatically treated as terminal.
 
-Mof may encounter a new species of lämp. If the response is structurally valid, she records it instead of immediately screaming into the void.
+This keeps MOTH conservative when the gameserver says something she does not understand.
 
-```mermaid
-flowchart TD
-    R[Submission Response] --> P{Structurally Valid?}
+New species of lämp require observation before classification.
 
-    P -->|No| X[Reject Response]
-    P -->|Yes| K{Known Code?}
+---
 
-    K -->|Yes| H[Handle Normally]
-    K -->|No| U[Record Unknown Code Safely]
+## Network Failure Handling
+
+### Connection could not be established
+
+Example internal error:
+
+```text
+mof flew toward the lämp, but could not find it
 ```
+
+The API converts submission connection failures into:
+
+```text
+HTTP 502 Bad Gateway
+```
+
+The flag is not remembered.
+
+---
+
+### Connection exists but the server stops responding
+
+Example internal error:
+
+```text
+mof waited for the lämp, but it never answered
+```
+
+The API converts submission timeouts into:
+
+```text
+HTTP 504 Gateway Timeout
+```
+
+The flag is not remembered.
+
+---
+
+### Connection disappears unexpectedly
+
+MOTH also detects when a server closes the connection before returning a submission response.
+
+The TCP writer is closed in cleanup code even when submission fails.
+
+Mof does not leave abandoned sockets lying around the nest.
+
+```text
+𐔌՞. .՞𐦯
+```
+
+---
+
+## API Responses
+
+### Successful submission
+
+```json
+{
+  "status": "submitted",
+  "code": "OK",
+  "message": "accepted",
+  "remembered": true
+}
+```
+
+### Local duplicate
+
+```json
+{
+  "status": "duplicate",
+  "code": "LOCAL",
+  "message": "mof has already seen this offering",
+  "remembered": true
+}
+```
+
+A locally detected duplicate never reaches the submission server again.
+
+### Retryable gameserver result
+
+```json
+{
+  "status": "submitted",
+  "code": "ERR",
+  "message": "try again later",
+  "remembered": false
+}
+```
+
+The flag remains eligible for another submission attempt.
 
 ---
 
@@ -365,31 +560,45 @@ Activate it:
 .\.venv\Scripts\Activate.ps1
 ```
 
-Install runtime dependencies:
+Install development dependencies:
 
 ```powershell
-python -m pip install -r requirements.txt
+pip install -r requirements-dev.txt
 ```
 
-For development and testing:
+Create a local `.env` containing the database key and optional submission configuration.
 
-```powershell
-python -m pip install -r requirements-dev.txt
+Example:
+
+```text
+MOTH_DB_KEY=<your-secret-key>
+
+MOTH_SUBMISSION_HOST=127.0.0.1
+MOTH_SUBMISSION_PORT=6666
+MOTH_SUBMISSION_TIMEOUT=2.0
 ```
 
-Start MOTH:
+Do not copy a database key from documentation or another installation.
+
+Generate your own.
+
+---
+
+## Running MOTH
+
+Start the development server with:
 
 ```powershell
 uvicorn app.main:app --reload
 ```
 
-MOTH will be available at:
+The API is then available locally at:
 
 ```text
 http://127.0.0.1:8000
 ```
 
-FastAPI documentation:
+FastAPI's interactive API documentation is available at:
 
 ```text
 http://127.0.0.1:8000/docs
@@ -399,46 +608,121 @@ http://127.0.0.1:8000/docs
 
 ## Testing
 
-Run:
+```text
+࿔‧ ֶָ֢˚˖𐦍˖˚ֶָ֢ ‧࿔
+```
+
+Run the complete test suite with:
 
 ```powershell
 pytest -v
 ```
 
-Current tests verify that:
+The current suite covers:
 
-1. Mof refuses empty flags.
-2. Mof remembers duplicate flags.
-3. Mof never stores plaintext flags in the SQLite database.
-4. Mof understands valid FAUST submission responses.
-5. Mof refuses malformed submission responses.
+* empty flag rejection
+* duplicate detection
+* keyed flag memory checks
+* absence of plaintext flags in SQLite
+* response parsing
+* malformed response rejection
+* fake TCP submission
+* socket cleanup
+* silent server timeout
+* connection failure
+* connection establishment timeout
+* safe localhost configuration defaults
+* environment configuration
+* invalid port handling
+* invalid timeout handling
+* successful API submission
+* local duplicate suppression
+* retryable gameserver errors
+* HTTP 502 translation
+* HTTP 504 translation
 
-Current laboratory status:
+Current status:
 
 ```text
-5 passed
+19 passed
 ```
 
-No moths were harmed during scientific poking.
+---
 
-### Disposable Science Nest
+## Disposable Science Nest
 
-Database tests never use the real `moth.db`.
+Database tests do not use the normal development database.
 
-Pytest creates a temporary SQLite database for each relevant test.
+Pytest creates a temporary database using:
+
+```text
+tmp_path
+```
+
+The application's database path is redirected for the duration of the test.
 
 ```mermaid
-flowchart TD
-    P[pytest starts] --> T[Create Temporary Directory]
-    T --> D[Create test_moth.db]
-    D --> R[Run Test]
-    R --> F[Test Finishes]
-    F --> X[Temporary Database Ceases to Exist]
+flowchart LR
+    P[pytest] --> T[Temporary Directory]
+    T --> D[test_moth.db]
+
+    P --> M[Monkeypatch DATABASE_PATH]
+    M --> APP[MOTH Database Code]
+    APP --> D
 ```
 
-Scientific Mof gets her own disposable universe.
+This allows tests to freely insert flags, create duplicates, and inspect raw database bytes without contaminating the normal MOTH database.
 
-Production memories remain untouched.
+When the test finishes, pytest cleans up the temporary nest.
+
+---
+
+## Manual End-to-End Test
+
+MOTH has been manually tested against a local fake gameserver.
+
+The test used three independent processes:
+
+```mermaid
+flowchart LR
+    PS[PowerShell Client]
+    API[MOTH FastAPI]
+    TCP[MOTH TCP Submitter]
+    FAKE[Fake Gameserver]
+    DB[(Encrypted SQLite)]
+
+    PS -->|HTTP POST| API
+    API --> TCP
+    TCP -->|TCP flag submission| FAKE
+    FAKE -->|OK accepted| TCP
+    TCP --> API
+    API --> DB
+    API --> PS
+```
+
+The fake gameserver received:
+
+```text
+FAUST_END_TO_END_MOF_001
+```
+
+MOTH returned a successful submission result and remembered the flag.
+
+Submitting the same flag again returned:
+
+```text
+duplicate
+LOCAL
+mof has already seen this offering
+```
+
+The duplicate did not reach the fake gameserver a second time.
+
+This verifies the complete local execution path rather than only isolated unit behavior.
+
+```text
+ཐིཋྀ
+```
 
 ---
 
@@ -446,73 +730,172 @@ Production memories remain untouched.
 
 ```text
 MOTH/
-|
-|-- app/
-|   |
-|   |-- api/
-|   |   |-- flags.py
-|   |   `-- health.py
-|   |
-|   |-- core/
-|   |   |-- crypto.py
-|   |   `-- submitter.py
-|   |
-|   |-- db/
-|   |   `-- database.py
-|   |
-|   `-- main.py
-|
-|-- tests/
-|   |-- conftest.py
-|   |-- test_flags.py
-|   `-- test_submitter.py
-|
-|-- .gitignore
-|-- pytest.ini
-|-- requirements.txt
-|-- requirements-dev.txt
-`-- README.md
+├── README.md
+├── app/
+│   ├── __init__.py
+│   ├── main.py
+│   ├── api/
+│   │   ├── __init__.py
+│   │   ├── health.py
+│   │   └── flags.py
+│   ├── core/
+│   │   ├── __init__.py
+│   │   ├── config.py
+│   │   ├── crypto.py
+│   │   └── submitter.py
+│   └── db/
+│       ├── __init__.py
+│       └── database.py
+├── tests/
+│   ├── conftest.py
+│   ├── test_config.py
+│   ├── test_flags.py
+│   └── test_submitter.py
+├── .gitignore
+├── pytest.ini
+├── requirements.txt
+└── requirements-dev.txt
 ```
 
 ---
 
-## How a Flag Moves Through MOTH
+## Security Model
 
-At the moment, the local intake pipeline looks like this:
-
-```mermaid
-sequenceDiagram
-    participant E as Exploit Script
-    participant A as MOTH API
-    participant V as Validator
-    participant C as Crypto Layer
-    participant D as SQLite
-
-    E->>A: POST /api/flags
-    A->>V: Validate flag
-    V->>C: Valid flag
-    C->>C: Generate HMAC fingerprint
-    C->>C: Encrypt with AES-256-GCM
-    C->>D: Store ciphertext, nonce, fingerprint
-
-    alt New Flag
-        D-->>A: Stored
-        A-->>E: status = stored
-    else Duplicate Flag
-        D-->>A: Duplicate fingerprint
-        A-->>E: status = duplicate
-    end
+```text
+/•᷅‎‎•᷄\੭
 ```
 
-Mof accepts the offering, MORI makes it unreadable, and SQLite remembers whether she has seen it before.
+MOTH currently protects flag contents primarily against exposure from a copied or accidentally leaked SQLite database.
+
+Application-layer encryption protects the flag ciphertext itself.
+
+It does not hide all database metadata.
+
+An observer with access to the database may still learn information such as:
+
+* number of stored flags
+* row identifiers
+* ciphertext sizes
+* fingerprints
+* database schema
+
+An attacker with full access to the MOTH host, process memory, or environment may also be able to recover the database key.
+
+MOTH should therefore not treat application-layer database encryption as a replacement for host security.
+
+The current design is defense in depth.
+
+MORI remains concerned.
+
+```text
+/•᷅‎‎•᷄\੭
+```
+
+---
+
+## Current Trust Boundary
+
+At the moment, MOTH is designed for local development and trusted team infrastructure.
+
+```mermaid
+flowchart LR
+    TEAM[Trusted Team Clients]
+    API[MOTH API]
+    SECRET[Server Secrets]
+    DB[(Encrypted Database)]
+    GS[Submission Server]
+
+    TEAM --> API
+    API --> SECRET
+    API --> DB
+    API --> GS
+```
+
+The database encryption key remains server-side.
+
+Clients should never receive `MOTH_DB_KEY`.
+
+API authentication has not yet been implemented.
+
+MOTH should therefore not currently be exposed directly to an untrusted network.
+
+---
+
+## Nest Residents
+
+```text
+ཐི༏ཋྀ
+ཐིཋྀ
+࿔‧ ֶָ֢˚˖𐦍˖˚ֶָ֢ ‧࿔
+𐔌՞. .՞𐦯
+⁺‧₊˚ ཐི⋆♱⋆ཋྀ ˚₊‧⁺
+ʚïɞ
+ᖭི༏ᖫྀ
+
+/•᷅‎‎•᷄\੭
+```
+
+Classification remains disputed.
+
+All residents appear to be authorized.
+
+MORI is watching.
+
+---
+
+## Planned Work
+
+The immediate roadmap is intentionally incremental.
+
+```mermaid
+flowchart TD
+    A[Encrypted Storage] --> B[Duplicate Detection]
+    B --> C[TCP Submission]
+    C --> D[Failure Handling]
+    D --> E[API Integration]
+    E --> F[API Failure End-to-End Tests]
+    F --> G[FAUST Flag Format Validation]
+    G --> H[API Authentication]
+    H --> I[Submission State and Retry Queue]
+    I --> J[Operational Dashboard]
+```
+
+### Near Term
+
+Planned next steps include:
+
+* manually test HTTP 502 behavior through FastAPI
+* manually test HTTP 504 behavior through FastAPI
+* verify failed submissions remain retryable
+* validate the actual FAUST flag format
+* add client authentication with `MOTH_API_TOKEN`
+* separate authentication secrets from database encryption secrets
+
+### Later
+
+Possible later additions include:
+
+* persistent submission status
+* retry queue
+* timestamps
+* submission history
+* service metadata
+* source metadata
+* concurrent workers
+* structured logging
+* metrics
+* dashboard
+* operator view
+* rate limiting
+* health information for the submission backend
 
 ---
 
 ## Mof Development Log
 
-The Git history is considered part of the documentation.
+MOTH has been built in deliberately small checkpoints.
 
-Highlights include:
+Notable discoveries so far:
 
 ```text
 mof built a tiny nest
@@ -529,65 +912,27 @@ mof survived scientific poking
 mof got a disposable science nest
 mori checked under the floorboards
 mof learned gameserver dialect
+mof learned to speak tcp
+mof learned when to stop staring at the lämp
+mof learned the difference between silence and absence
+mof learned where the lämp lives
+mof learned to check the nest first
 ```
 
-If something breaks later, appropriate commit vocabulary includes:
-
-```text
-mof bonked into the api
-mof ate the config
-mof recovered from impact
-mof misplaced the lämp
-mof has no idea what happened
-```
-
-Technical accuracy is important.
-
-So is maintaining proper moth incident terminology.
+More incidents are expected.
 
 ---
 
-## Planned Next Steps
+## Why MOTH?
 
-The next major milestone is the submission client.
+Because every attack-defense team eventually creates some cursed little script that forwards flags.
 
-MOTH needs to learn how to:
+This one gets tests.
 
-```mermaid
-flowchart TD
-    A[Open TCP Connection]
-    B[Read Gameserver Greeting]
-    C[Send Flag + Newline]
-    D[Receive Response]
-    E[Parse Response]
-    F[Report Result]
+```text
+⁺‧₊˚ ཐི⋆♱⋆ཋྀ ˚₊‧⁺
 
-    A --> B
-    B --> C
-    C --> D
-    D --> E
-    E --> F
+      lämp acquired
+
+/•᷅‎‎•᷄\੭
 ```
-
-This will first be tested against mocked network connections.
-
-Mof is not allowed to accidentally fire test flags at the real CTF infrastructure.
-
-After that:
-
-```mermaid
-flowchart LR
-    A[Submission Queue]
-    B[Retry Handling]
-    C[API Authentication]
-    D[Submission History]
-    E[Statistics]
-    F[Dashboard]
-    G[More Moths]
-
-    A --> B --> C --> D --> E --> F --> G
-```
-
-The architecture is temporary.
-
-The moths are permanent.
