@@ -1,9 +1,11 @@
+import os
 import sqlite3
 from pathlib import Path
+
 from app.core.crypto import encrypt_flag, fingerprint_flag
 
 
-DATABASE_PATH = Path("moth.db")
+DATABASE_PATH = Path(os.getenv("MOTH_DB_PATH", "moth.db"))
 
 
 def initialize_database() -> None:
@@ -18,6 +20,7 @@ def initialize_database() -> None:
             )
             """
         )
+
 
 def store_flag(flag: str) -> bool:
     fingerprint = fingerprint_flag(flag)
