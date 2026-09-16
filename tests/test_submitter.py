@@ -3,7 +3,11 @@ import asyncio
 import pytest
 
 from app.core import submitter
-from app.core.submitter import parse_submission_response
+from app.core.submitter import (
+    SubmissionConnectionError,
+    SubmissionTimeoutError,
+    parse_submission_response,
+)
 
 
 def test_mof_understands_submission_response():
@@ -79,7 +83,60 @@ def test_mof_submits_flag_over_fake_tcp(monkeypatch):
     assert result.message == "accepted"
 
 
-def test_mof_gives_up_when_the_lamp_never_answers(monkeypatch):
+def test_mof_gives_up_when_connected_lamp_never_answers(monkeypatch):
+    class SleepyReader:
+        async def readuntil(self, separator: bytes) -> bytes:
+            await asyncio.sleep(1)
+
+    writer = FakeWriter()
+
+    async def fake_open_connection(host: str, port: int):
+        return SleepyReader(), writer
+
+    monkeypatch.setattr(
+        submitter.asyncio,
+        "open_connection",
+        fake_open_connection,
+    )
+
+    with pytest.raises(
+        SubmissionTimeoutError,
+        match="mof waited for the lämp",
+    ):
+        asyncio.run(
+            submitter.submit_flag(
+                "FAUST_TEST_MOF_123",
+                host="fake.gameserver",
+                port=666,
+                timeout=0.01,
+            )
+        )
+
+
+def test_mof_notices_connection_refused(monkeypatch):
+    async def fake_open_connection(host: str, port: int):
+        raise OSError("connection refused")
+
+    monkeypatch.setattr(
+        submitter.asyncio,
+        "open_connection",
+        fake_open_connection,
+    )
+
+    with pytest.raises(
+        SubmissionConnectionError,
+        match="there was no lämp",
+    ):
+        asyncio.run(
+            submitter.submit_flag(
+                "FAUST_TEST_MOF_123",
+                host="fake.gameserver",
+                port=666,
+            )
+        )
+
+
+def test_mof_notices_connection_timeout(monkeypatch):
     async def fake_open_connection(host: str, port: int):
         await asyncio.sleep(1)
 
@@ -90,8 +147,8 @@ def test_mof_gives_up_when_the_lamp_never_answers(monkeypatch):
     )
 
     with pytest.raises(
-        TimeoutError,
-        match="mof waited for the lämp",
+        SubmissionConnectionError,
+        match="could not find it",
     ):
         asyncio.run(
             submitter.submit_flag(

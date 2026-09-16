@@ -9,6 +9,14 @@ class SubmissionResult:
     message: str | None = None
 
 
+class SubmissionConnectionError(ConnectionError):
+    pass
+
+
+class SubmissionTimeoutError(TimeoutError):
+    pass
+
+
 def parse_submission_response(line: str) -> SubmissionResult:
     parts = line.strip().split(maxsplit=2)
 
@@ -38,34 +46,47 @@ async def submit_flag(
     writer: asyncio.StreamWriter | None = None
 
     try:
-        async with asyncio.timeout(timeout):
-            reader, writer = await asyncio.open_connection(
-                host,
-                port,
-            )
-
-            await reader.readuntil(b"\n\n")
-
-            writer.write(
-                f"{flag}\n".encode("utf-8")
-            )
-            await writer.drain()
-
-            response = await reader.readline()
-
-            if not response:
-                raise ConnectionError(
-                    "mof lost the gameserver before it answered"
+        try:
+            async with asyncio.timeout(timeout):
+                reader, writer = await asyncio.open_connection(
+                    host,
+                    port,
                 )
 
-            return parse_submission_response(
-                response.decode("utf-8")
+        except TimeoutError as exc:
+            raise SubmissionConnectionError(
+                "mof flew toward the lämp, but could not find it"
+            ) from exc
+
+        except OSError as exc:
+            raise SubmissionConnectionError(
+                "mof flew toward the lämp, but there was no lämp"
+            ) from exc
+
+        try:
+            async with asyncio.timeout(timeout):
+                await reader.readuntil(b"\n\n")
+
+                writer.write(
+                    f"{flag}\n".encode("utf-8")
+                )
+                await writer.drain()
+
+                response = await reader.readline()
+
+        except TimeoutError as exc:
+            raise SubmissionTimeoutError(
+                "mof waited for the lämp, but it never answered"
+            ) from exc
+
+        if not response:
+            raise SubmissionConnectionError(
+                "mof lost the gameserver before it answered"
             )
 
-    except TimeoutError as exc:
-        raise TimeoutError(
-            "mof waited for the lämp, but it never answered"
-        ) from exc
+        return parse_submission_response(
+            response.decode("utf-8")
+        )
 
     finally:
         if writer is not None:
