@@ -2,7 +2,10 @@ from fastapi import FastAPI
 
 from app.api.flags import router as flags_router
 from app.api.health import router as health_router
+from app.db.database import initialize_database
 
+
+initialize_database()
 
 app = FastAPI()
 
