@@ -58,3 +58,14 @@ def get_submission_timeout() -> float:
         )
 
     return timeout
+
+
+def get_api_token() -> str:
+    token = os.getenv("MOTH_API_TOKEN")
+
+    if token is None or not token.strip():
+        raise RuntimeError(
+            "MOTH_API_TOKEN is missing"
+        )
+
+    return token

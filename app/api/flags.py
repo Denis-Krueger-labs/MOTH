@@ -1,8 +1,17 @@
 import re
 
-from fastapi import APIRouter, HTTPException
-from pydantic import BaseModel, Field, field_validator
+from fastapi import (
+    APIRouter,
+    Depends,
+    HTTPException,
+)
+from pydantic import (
+    BaseModel,
+    Field,
+    field_validator,
+)
 
+from app.core.auth import require_api_token
 from app.core.config import (
     get_submission_host,
     get_submission_port,
@@ -19,6 +28,9 @@ from app.db.database import has_flag, store_flag
 router = APIRouter(
     prefix="/api",
     tags=["flags"],
+    dependencies=[
+        Depends(require_api_token),
+    ],
 )
 
 
@@ -73,7 +85,9 @@ async def submit_flag(
         return {
             "status": "duplicate",
             "code": "LOCAL",
-            "message": "mof has already seen this offering",
+            "message": (
+                "mof has already seen this offering"
+            ),
             "remembered": True,
         }
 

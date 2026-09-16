@@ -1,13 +1,16 @@
 import pytest
 
 from app.core.config import (
+    get_api_token,
     get_submission_host,
     get_submission_port,
     get_submission_timeout,
 )
 
 
-def test_mof_uses_safe_local_lamp_by_default(monkeypatch):
+def test_mof_uses_safe_local_lamp_by_default(
+    monkeypatch,
+):
     monkeypatch.delenv(
         "MOTH_SUBMISSION_HOST",
         raising=False,
@@ -26,7 +29,9 @@ def test_mof_uses_safe_local_lamp_by_default(monkeypatch):
     assert get_submission_timeout() == 5.0
 
 
-def test_mof_reads_lamp_from_environment(monkeypatch):
+def test_mof_reads_lamp_from_environment(
+    monkeypatch,
+):
     monkeypatch.setenv(
         "MOTH_SUBMISSION_HOST",
         "fake.gameserver",
@@ -45,7 +50,9 @@ def test_mof_reads_lamp_from_environment(monkeypatch):
     assert get_submission_timeout() == 2.5
 
 
-def test_mof_refuses_suspicious_lamp_port(monkeypatch):
+def test_mof_refuses_suspicious_lamp_port(
+    monkeypatch,
+):
     monkeypatch.setenv(
         "MOTH_SUBMISSION_PORT",
         "banana",
@@ -58,7 +65,9 @@ def test_mof_refuses_suspicious_lamp_port(monkeypatch):
         get_submission_port()
 
 
-def test_mof_refuses_suspicious_timeout(monkeypatch):
+def test_mof_refuses_suspicious_timeout(
+    monkeypatch,
+):
     monkeypatch.setenv(
         "MOTH_SUBMISSION_TIMEOUT",
         "0",
@@ -69,3 +78,32 @@ def test_mof_refuses_suspicious_timeout(monkeypatch):
         match="greater than zero",
     ):
         get_submission_timeout()
+
+
+def test_mori_reads_api_token(
+    monkeypatch,
+):
+    monkeypatch.setenv(
+        "MOTH_API_TOKEN",
+        "very-secret-moth-token",
+    )
+
+    assert (
+        get_api_token()
+        == "very-secret-moth-token"
+    )
+
+
+def test_mori_refuses_to_guard_without_token(
+    monkeypatch,
+):
+    monkeypatch.delenv(
+        "MOTH_API_TOKEN",
+        raising=False,
+    )
+
+    with pytest.raises(
+        RuntimeError,
+        match="MOTH_API_TOKEN is missing",
+    ):
+        get_api_token()
