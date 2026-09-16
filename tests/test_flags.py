@@ -2,7 +2,7 @@ import pytest
 from pydantic import ValidationError
 
 from app.api.flags import FlagSubmission
-from app.db.database import store_flag
+from app.db.database import has_flag, store_flag
 
 
 def test_mof_refuses_empty_flag():
@@ -18,6 +18,17 @@ def test_mof_remembers_duplicate_flag(test_database):
 
     assert first_offering is True
     assert second_offering is False
+
+
+def test_mof_knows_if_flag_was_seen(test_database):
+    flag = "FAUST_TEST_MEMORY_456"
+
+    assert has_flag(flag) is False
+
+    store_flag(flag)
+
+    assert has_flag(flag) is True
+
 
 def test_mof_never_stores_plaintext(test_database):
     flag = "FAUST_SECRET_MOF_789"

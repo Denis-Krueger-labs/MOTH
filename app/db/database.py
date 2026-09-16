@@ -22,6 +22,23 @@ def initialize_database() -> None:
         )
 
 
+def has_flag(flag: str) -> bool:
+    fingerprint = fingerprint_flag(flag)
+
+    with sqlite3.connect(DATABASE_PATH) as connection:
+        row = connection.execute(
+            """
+            SELECT 1
+            FROM flags
+            WHERE flag_fingerprint = ?
+            LIMIT 1
+            """,
+            (fingerprint,),
+        ).fetchone()
+
+    return row is not None
+
+
 def store_flag(flag: str) -> bool:
     fingerprint = fingerprint_flag(flag)
     nonce, ciphertext = encrypt_flag(flag)
