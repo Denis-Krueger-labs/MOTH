@@ -1,3 +1,4 @@
+import asyncio
 from dataclasses import dataclass
 
 
@@ -26,3 +27,32 @@ def parse_submission_response(line: str) -> SubmissionResult:
         code=code,
         message=message,
     )
+
+
+async def submit_flag(
+    flag: str,
+    host: str,
+    port: int,
+) -> SubmissionResult:
+    reader, writer = await asyncio.open_connection(
+        host,
+        port,
+    )
+
+    try:
+        await reader.readuntil(b"\n\n")
+
+        writer.write(
+            f"{flag}\n".encode("utf-8")
+        )
+        await writer.drain()
+
+        response = await reader.readline()
+
+        return parse_submission_response(
+            response.decode("utf-8")
+        )
+
+    finally:
+        writer.close()
+        await writer.wait_closed()
