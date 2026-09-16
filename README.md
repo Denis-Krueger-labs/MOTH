@@ -12,13 +12,15 @@
 
 > A small flag relay for attack-defense CTFs, supervised by MORI and operated by one increasingly capable moth.
 
-MOTH is a lightweight FastAPI service for receiving captured flags from multiple operators or exploit scripts, validating and deduplicating them, storing them securely, and forwarding them to a CTF submission server.
+MOTH is a lightweight FastAPI service for receiving captured flags from multiple operators or exploit scripts, authenticating clients, validating and deduplicating flags, storing them securely, and forwarding them to a CTF submission server.
 
 The project is currently being built for FAUST CTF 2026.
 
 MOTH is intentionally small, understandable, and boring where security matters.
 
 The moth jokes are not considered part of the threat model.
+
+The cat might be.
 
 ---
 
@@ -31,6 +33,8 @@ The moth jokes are not considered part of the threat model.
 MOTH currently supports:
 
 * FastAPI HTTP API
+* Bearer-token API authentication
+* constant-time API token comparison
 * Pydantic request validation
 * official FAUST 2026 flag-format validation
 * encrypted local flag storage
@@ -43,22 +47,25 @@ MOTH currently supports:
 * response timeout handling
 * connection failure handling
 * distinction between retryable and terminal submission results
+* retry-safe HTTP 502 handling
+* retry-safe HTTP 504 handling
 * pytest-based automated testing
 * disposable temporary databases during tests
 * full localhost end-to-end testing with a fake gameserver
-* retry-safe HTTP 502 handling
-* retry-safe HTTP 504 handling
+* authenticated end-to-end flag submission
 
 Current automated test status:
 
 ```text
-23 passed
+31 passed
 ```
 
-The complete local path has also been manually tested:
+The complete authenticated local path has been manually tested:
 
 ```text
 HTTP request
+    ↓
+MORI authentication
     ↓
 FAUST flag validation
     ↓
@@ -79,6 +86,8 @@ A second submission of the same flag is detected locally and does not reach the 
 
 Malformed flags are rejected before MOTH attempts a network connection.
 
+Unauthorized requests are rejected before Mof processes their contents.
+
 ---
 
 ## What MOTH Is For
@@ -88,6 +97,7 @@ During an attack-defense CTF, several people and automated exploits may discover
 Without a central relay, every tool needs to independently handle:
 
 * submission server connections
+* authentication
 * duplicate detection
 * retries
 * response parsing
@@ -99,23 +109,26 @@ MOTH provides one small service between the team and the gameserver.
 
 ```mermaid
 flowchart LR
-    A[Exploit Script] --> M[MOTH]
+    A[Exploit Script] --> M[MORI]
     B[Operator] --> M
     C[Another Tool] --> M
 
-    M --> V[Flag Validation]
+    M -->|Authorized| API[MOTH API]
+    M -->|Unauthorized| SWAT[Swatted Away]
+
+    API --> V[Flag Validation]
     V --> D[Local Duplicate Check]
     D --> S[TCP Submitter]
     S --> G[Gameserver]
 
     G --> S
     S --> E[Encrypted SQLite Storage]
-    S --> M
+    S --> API
 ```
 
-Exploit scripts only need to know how to send a flag to MOTH.
+MORI guards the entrance.
 
-Mof handles the rest.
+Mof carries the flags.
 
 ```text
 ཐི༏ཋྀ
@@ -125,16 +138,17 @@ Mof handles the rest.
 
 ## Architecture
 
-MOTH currently consists of four main pieces.
+MOTH currently consists of five main pieces.
 
 ```mermaid
 flowchart TB
+    AUTH[MORI Authentication]
     API[FastAPI API]
-
     CONFIG[Configuration]
     DB[Encrypted SQLite Storage]
     SUB[TCP Submitter]
 
+    AUTH --> API
     API --> CONFIG
     API --> DB
     API --> SUB
@@ -142,9 +156,21 @@ flowchart TB
     SUB --> GS[Submission Server]
 ```
 
+### Authentication
+
+MORI protects the API boundary.
+
+Clients authenticate using:
+
+```text
+Authorization: Bearer <MOTH_API_TOKEN>
+```
+
+Requests without valid credentials are rejected before the flag-handling endpoint runs.
+
 ### API
 
-FastAPI receives flags from operators and exploit scripts.
+FastAPI receives flags from authenticated operators and exploit scripts.
 
 Current endpoint:
 
@@ -166,6 +192,125 @@ Example request:
 
 ---
 
+## MORI Guards the Nest
+
+```text
+/•᷅‎‎•᷄\੭
+```
+
+MORI is responsible for the API security boundary.
+
+The authentication flow is:
+
+```mermaid
+flowchart TD
+    A[HTTP Request] --> B{Authorization Header?}
+
+    B -->|No| C[MORI Swats Request]
+    B -->|Yes| D{Bearer Scheme Valid?}
+
+    D -->|No| E[MORI Swats Request]
+    D -->|Yes| F{Token Matches?}
+
+    F -->|No| G[MORI Swats Request]
+    F -->|Yes| H[Mof Receives Request]
+```
+
+MORI currently distinguishes between several failures.
+
+### Missing authorization
+
+```json
+{
+  "detail": "MORI found no authorization at the nest entrance"
+}
+```
+
+HTTP status:
+
+```text
+401 Unauthorized
+```
+
+### Malformed authorization
+
+```json
+{
+  "detail": "MORI swatted away malformed authorization"
+}
+```
+
+HTTP status:
+
+```text
+401 Unauthorized
+```
+
+### Unknown visitor
+
+```json
+{
+  "detail": "MORI does not recognize this visitor"
+}
+```
+
+HTTP status:
+
+```text
+401 Unauthorized
+```
+
+### Missing server-side API token
+
+If the server itself is missing `MOTH_API_TOKEN`, MORI refuses to pretend the nest is guarded.
+
+```json
+{
+  "detail": "MORI cannot guard the nest because MOTH_API_TOKEN is missing"
+}
+```
+
+HTTP status:
+
+```text
+503 Service Unavailable
+```
+
+MORI does not fail open.
+
+```text
+/•᷅‎‎•᷄\੭   swat
+```
+
+---
+
+## Secret Comparison
+
+API tokens are compared using:
+
+```python
+hmac.compare_digest(...)
+```
+
+rather than ordinary string equality.
+
+The API token and database encryption key are separate secrets with separate jobs.
+
+```mermaid
+flowchart LR
+    APIKEY[MOTH_API_TOKEN]
+    DBKEY[MOTH_DB_KEY]
+
+    APIKEY --> AUTH[MORI Authentication]
+    DBKEY --> CRYPTO[Flag Encryption and Fingerprinting]
+```
+
+Clients may need `MOTH_API_TOKEN`.
+
+Clients must never receive `MOTH_DB_KEY`.
+
+---
+
 ## FAUST Flag Validation
 
 ```text
@@ -174,13 +319,13 @@ Example request:
 
 MOTH validates incoming flags before duplicate checks or network submission.
 
-The current FAUST 2026 format is:
+The FAUST 2026 format is:
 
 ```text
 FAUST_[A-Za-z0-9/+]{32}
 ```
 
-This means a flag must:
+A flag must:
 
 * start with `FAUST_`
 * contain exactly 32 characters after the prefix
@@ -202,52 +347,55 @@ MOTH_AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA
 FAUST_AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA!
 ```
 
-Invalid flags are rejected by Pydantic with HTTP `422`.
+Invalid authenticated requests are rejected by Pydantic with HTTP `422`.
 
 They never reach the TCP submission layer.
 
+Unauthorized requests are rejected by MORI before flag validation occurs.
+
 ```mermaid
 flowchart TD
-    A[Incoming Flag] --> B{Valid FAUST Format?}
+    A[Incoming Request] --> B{Authorized?}
 
-    B -->|No| C[HTTP 422]
-    B -->|Yes| D[Duplicate Check]
+    B -->|No| C[MORI Swats]
+    B -->|Yes| D{Valid FAUST Flag?}
 
-    C --> E[No TCP Connection]
-    D --> F[Continue Processing]
+    D -->|No| E[HTTP 422]
+    D -->|Yes| F[Duplicate Check]
+
+    C --> G[No Flag Processing]
+    E --> H[No TCP Connection]
+    F --> I[Continue Processing]
 ```
-
-Mof has standards now.
 
 ---
 
 ## Flag Processing
 
-A new flag currently moves through MOTH like this:
+A valid authenticated flag currently moves through MOTH like this:
 
 ```mermaid
 flowchart TD
-    A[Receive flag] --> B[Validate FAUST format]
-    B --> C[Calculate keyed fingerprint]
-    C --> D{Already stored?}
+    A[Receive Request] --> B[MORI Authentication]
+    B --> C[Validate FAUST Format]
+    C --> D[Calculate Keyed Fingerprint]
+    D --> E{Already Stored?}
 
-    D -->|Yes| E[Return local duplicate]
+    E -->|Yes| F[Return Local Duplicate]
 
-    D -->|No| F[Connect to submission server]
-    F --> G[Send flag]
-    G --> H[Read response]
-    H --> I[Parse response code]
+    E -->|No| G[Connect to Submission Server]
+    G --> H[Send Flag]
+    H --> I[Read Response]
+    I --> J[Parse Response Code]
 
-    I --> J{Terminal result?}
+    J --> K{Terminal Result?}
 
-    J -->|Yes| K[Encrypt and store flag]
-    J -->|No| L[Leave flag retryable]
+    K -->|Yes| L[Encrypt and Store Flag]
+    K -->|No| M[Leave Flag Retryable]
 
-    K --> M[Return result]
-    L --> M
+    L --> N[Return Result]
+    M --> N
 ```
-
-This ordering is intentional.
 
 MOTH does not permanently remember a flag before attempting submission.
 
@@ -336,7 +484,7 @@ flowchart LR
 
 ## Key Separation
 
-MOTH uses one master secret but derives separate keys for separate cryptographic purposes.
+MOTH uses one database master secret but derives separate keys for separate cryptographic purposes.
 
 ```mermaid
 flowchart TB
@@ -351,63 +499,48 @@ flowchart TB
 
 The encryption key is never reused directly as the fingerprint key.
 
-This prevents two unrelated cryptographic operations from sharing identical key material.
+The API authentication token is not derived from this master key.
+
+It is a separate secret.
 
 ---
 
 ## Secrets
 
-The database master key is provided through:
+MOTH currently uses two important secrets.
+
+### Database master key
 
 ```text
 MOTH_DB_KEY
 ```
 
-It must decode to exactly 32 bytes.
+This secret:
 
-The key belongs to the MOTH server.
+* must decode to exactly 32 bytes
+* remains on the MOTH server
+* derives encryption and fingerprint keys
+* must never be given to API clients
 
-Clients submitting flags do not need access to it.
+### API token
 
-A generated key may be stored in a local `.env` file during development.
+```text
+MOTH_API_TOKEN
+```
+
+This secret:
+
+* authenticates clients
+* is supplied as a Bearer token
+* is independent of `MOTH_DB_KEY`
+* should be randomly generated
+* must not be committed to Git
+
+Local development secrets may be stored in `.env`.
 
 `.env` is excluded from Git.
 
-Never commit the database key.
-
----
-
-## MORI Is Watching
-
-```text
-/•᷅‎‎•᷄\੭
-```
-
-MORI does not submit flags.
-
-MORI watches the nest.
-
-```mermaid
-flowchart LR
-    CLIENT[Team Client]
-    API[MOTH API]
-    SECRET[MOTH_DB_KEY]
-    DB[(Encrypted SQLite)]
-    GS[Submission Server]
-
-    CLIENT --> API
-    API --> DB
-    API --> GS
-    SECRET --> API
-```
-
-Clients should never receive the database encryption key.
-
-MORI considers unnecessary secret sharing suspicious.
-
-```text
-/•᷅‎‎•᷄\੭
-```
+Never commit either secret.
 
 ---
 
@@ -534,8 +667,6 @@ This has been manually verified end to end.
 
 After a `502`, restarting the fake gameserver and submitting the same flag again successfully sends the flag.
 
----
-
 ### Connection exists but the server stops responding
 
 Example internal error:
@@ -556,11 +687,9 @@ This has also been manually verified end to end.
 
 After a `504`, replacing the silent server with a working fake gameserver and submitting the same flag again succeeds.
 
----
-
 ### Connection disappears unexpectedly
 
-MOTH also detects when a server closes the connection before returning a submission response.
+MOTH detects when a server closes the connection before returning a submission response.
 
 The TCP writer is closed in cleanup code even when submission fails.
 
@@ -633,19 +762,26 @@ Install development dependencies:
 pip install -r requirements-dev.txt
 ```
 
-Create a local `.env` containing the database key and optional submission configuration.
+Generate a random API token:
+
+```powershell
+python -c "import secrets; print(secrets.token_urlsafe(32))"
+```
+
+Create a local `.env`.
 
 Example:
 
 ```text
-MOTH_DB_KEY=<your-secret-key>
+MOTH_DB_KEY=<your-database-key>
+MOTH_API_TOKEN=<your-api-token>
 
 MOTH_SUBMISSION_HOST=127.0.0.1
 MOTH_SUBMISSION_PORT=6666
 MOTH_SUBMISSION_TIMEOUT=2.0
 ```
 
-Do not copy a database key from documentation or another installation.
+Do not copy secrets from documentation or another installation.
 
 Generate your own.
 
@@ -670,6 +806,42 @@ FastAPI's interactive API documentation is available at:
 ```text
 http://127.0.0.1:8000/docs
 ```
+
+Authenticated requests require:
+
+```text
+Authorization: Bearer <MOTH_API_TOKEN>
+```
+
+---
+
+## Example Authenticated Request
+
+PowerShell example:
+
+```powershell
+$token = (
+    Get-Content .env |
+    Where-Object { $_ -like "MOTH_API_TOKEN=*" }
+).Split("=", 2)[1]
+
+$body = @{
+    flag = "FAUST_AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
+    service = "example"
+    source = "manual"
+} | ConvertTo-Json
+
+Invoke-RestMethod `
+    -Uri "http://127.0.0.1:8000/api/flags" `
+    -Method Post `
+    -ContentType "application/json" `
+    -Headers @{
+        Authorization = "Bearer $token"
+    } `
+    -Body $body
+```
+
+The example loads the token from `.env` rather than placing the secret directly into the command.
 
 ---
 
@@ -703,9 +875,17 @@ The current suite covers:
 * connection failure
 * connection establishment timeout
 * safe localhost configuration defaults
-* environment configuration
+* environment submission configuration
 * invalid port handling
 * invalid timeout handling
+* API token configuration
+* missing API token handling
+* missing authorization rejection
+* malformed authorization rejection
+* incorrect Bearer token rejection
+* valid Bearer token acceptance
+* authentication before flag validation
+* fail-closed behavior when API authentication is unconfigured
 * successful API submission
 * local duplicate suppression
 * retryable gameserver errors
@@ -715,7 +895,50 @@ The current suite covers:
 Current status:
 
 ```text
-23 passed
+31 passed
+```
+
+---
+
+## Authentication Tests
+
+MORI's behavior is explicitly tested.
+
+```text
+no Authorization header
+→ 401
+→ MORI swats
+
+malformed Authorization header
+→ 401
+→ MORI swats
+
+wrong Bearer token
+→ 401
+→ MORI swats
+
+correct Bearer token
+→ request enters Mof's processing path
+
+no server-side MOTH_API_TOKEN
+→ 503
+→ MORI refuses to pretend the nest is guarded
+```
+
+One test deliberately sends both:
+
+```text
+unauthorized request
++
+invalid flag
+```
+
+The result is `401`, not `422`.
+
+This proves authentication happens before Mof examines the flag.
+
+```text
+/•᷅‎‎•᷄\੭
 ```
 
 ---
@@ -755,29 +978,77 @@ MOTH has been manually tested against local fake gameservers.
 ```mermaid
 flowchart LR
     PS[PowerShell Client]
+    MORI[MORI]
     API[MOTH FastAPI]
     TCP[MOTH TCP Submitter]
     FAKE[Fake Gameserver]
     DB[(Encrypted SQLite)]
 
-    PS -->|HTTP POST| API
+    PS -->|Bearer Token| MORI
+    MORI -->|Authorized| API
+    MORI -->|Unauthorized| SWAT[Swat]
+
     API --> TCP
-    TCP -->|TCP flag submission| FAKE
+    TCP -->|TCP Flag Submission| FAKE
     FAKE -->|Response| TCP
     TCP --> API
     API --> DB
     API --> PS
 ```
 
-### Successful submission
+### Successful authenticated submission
 
-A valid-shaped flag was submitted through the entire stack.
+A valid-shaped flag was submitted with the correct Bearer token through the entire stack.
 
-The fake gameserver received it and returned `OK`.
+The fake gameserver received:
+
+```text
+FAUST_ZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZ
+```
+
+and returned `OK`.
 
 MOTH remembered the flag.
 
-Submitting the same flag again returned a local duplicate without another TCP submission.
+### Missing authentication
+
+A valid flag submitted without an Authorization header was rejected with:
+
+```text
+MORI found no authorization at the nest entrance
+```
+
+The request never reached flag processing.
+
+### Incorrect authentication
+
+A request using an incorrect Bearer token was rejected with:
+
+```text
+MORI does not recognize this visitor
+```
+
+The request never reached Mof.
+
+### Authorized malformed flag
+
+A request using the correct token but containing:
+
+```text
+absolutely-not-a-faust-flag
+```
+
+passed MORI and was then rejected by Mof's FAUST format validation.
+
+This manually confirms the boundary order:
+
+```text
+MORI
+↓
+Mof
+↓
+TCP
+```
 
 ### Missing gameserver
 
@@ -799,28 +1070,6 @@ After replacing it with the normal fake gameserver, submitting the same flag suc
 
 The timed-out attempt had not been remembered.
 
-### Invalid flag
-
-The old development flag:
-
-```text
-FAUST_END_TO_END_MOF_001
-```
-
-was submitted after strict flag validation was introduced.
-
-MOTH rejected it before networking with:
-
-```text
-mof does not recognize this as a FAUST flag
-```
-
-A correctly shaped flag was then accepted and submitted normally.
-
-```text
-ཐིཋྀ
-```
-
 ---
 
 ## Project Structure
@@ -837,6 +1086,7 @@ MOTH/
 │   │   └── flags.py
 │   ├── core/
 │   │   ├── __init__.py
+│   │   ├── auth.py
 │   │   ├── config.py
 │   │   ├── crypto.py
 │   │   └── submitter.py
@@ -845,6 +1095,7 @@ MOTH/
 │       └── database.py
 ├── tests/
 │   ├── conftest.py
+│   ├── test_auth.py
 │   ├── test_config.py
 │   ├── test_flags.py
 │   └── test_submitter.py
@@ -862,9 +1113,17 @@ MOTH/
 /•᷅‎‎•᷄\੭
 ```
 
-MOTH currently protects flag contents primarily against exposure from a copied or accidentally leaked SQLite database.
+MOTH currently protects two different boundaries.
 
-Application-layer encryption protects the flag ciphertext itself.
+### API boundary
+
+MORI requires a Bearer token before requests enter Mof's flag-processing path.
+
+This prevents arbitrary unauthenticated clients from submitting flags through the API.
+
+### Database boundary
+
+Application-layer encryption protects stored flag contents if the SQLite database alone is copied or leaked.
 
 It does not hide all database metadata.
 
@@ -876,13 +1135,13 @@ An observer with access to the database may still learn information such as:
 * fingerprints
 * database schema
 
-An attacker with full access to the MOTH host, process memory, or environment may also be able to recover the database key.
+An attacker with full access to the MOTH host, process memory, environment, or `.env` file may be able to recover both server secrets.
 
-MOTH should therefore not treat application-layer database encryption as a replacement for host security.
+MOTH therefore does not treat authentication or application-layer database encryption as replacements for host security.
 
 The current design is defense in depth.
 
-MORI remains concerned.
+MORI remains suspicious.
 
 ```text
 /•᷅‎‎•᷄\੭
@@ -892,31 +1151,44 @@ MORI remains concerned.
 
 ## Current Trust Boundary
 
-At the moment, MOTH is designed for local development and trusted team infrastructure.
-
 ```mermaid
 flowchart LR
-    TEAM[Trusted Team Clients]
+    TEAM[Team Clients]
+    MORI[MORI Auth Boundary]
     API[MOTH API]
-    SECRET[Server Secrets]
+    AUTHSECRET[MOTH_API_TOKEN]
+    DBSECRET[MOTH_DB_KEY]
     DB[(Encrypted Database)]
     GS[Submission Server]
 
-    TEAM --> API
-    API --> SECRET
+    TEAM -->|Bearer Token| MORI
+    AUTHSECRET --> MORI
+
+    MORI -->|Authorized| API
+
+    DBSECRET --> API
     API --> DB
     API --> GS
 ```
 
-The database encryption key remains server-side.
+`MOTH_API_TOKEN` authenticates clients.
 
-Clients should never receive `MOTH_DB_KEY`.
+`MOTH_DB_KEY` protects stored flag material.
 
-API authentication has not yet been implemented.
+They are deliberately separate secrets.
 
-MOTH should therefore not currently be exposed directly to an untrusted network.
+Bearer-token authentication does not encrypt network traffic.
 
-That is the next major security boundary to add.
+MOTH should therefore still be deployed only across trusted transport, such as:
+
+* localhost
+* a protected team network
+* a VPN
+* TLS-terminated infrastructure
+
+The API should not be exposed directly over an untrusted plaintext network merely because it now has a Bearer token.
+
+MORI has a paw, not a TLS certificate.
 
 ---
 
@@ -936,9 +1208,9 @@ That is the next major security boundary to add.
 
 Classification remains disputed.
 
-All residents appear to be authorized.
+All moths appear to be authorized.
 
-MORI is watching.
+MORI checked.
 
 ---
 
@@ -951,11 +1223,12 @@ flowchart TD
     C[TCP Submission ✓]
     D[Failure Handling ✓]
     E[API Integration ✓]
-    F[API Failure End-to-End Tests ✓]
+    F[Failure End-to-End Tests ✓]
     G[FAUST Flag Validation ✓]
-    H[API Authentication]
-    I[Submission State and Retry Queue]
-    J[Operational Dashboard]
+    H[API Authentication ✓]
+    I[Submission State]
+    J[Retry Queue]
+    K[Operational Dashboard]
 
     A --> B
     B --> C
@@ -966,34 +1239,36 @@ flowchart TD
     G --> H
     H --> I
     I --> J
+    J --> K
 ```
 
 ### Near Term
 
 Planned next steps include:
 
-* add client authentication with `MOTH_API_TOKEN`
-* keep the API token separate from `MOTH_DB_KEY`
-* test authenticated and unauthenticated API requests
-* reject invalid credentials before flag processing
-* add persistent submission state
+* design persistent submission state
+* distinguish queued, submitted, terminal, and retryable flags
 * design retry behavior
+* persist response metadata
+* persist timestamps
+* decide how `service` and `source` metadata should be stored
+* add concurrency-safe submission handling
 
 ### Later
 
 Possible later additions include:
 
 * retry queue
-* timestamps
 * submission history
-* service metadata
-* source metadata
 * concurrent workers
 * structured logging
 * metrics
 * dashboard
 * operator view
 * rate limiting
+* token rotation
+* multiple client tokens
+* per-client identity
 * health information for the submission backend
 
 ---
@@ -1026,6 +1301,7 @@ mof learned where the lämp lives
 mof learned to check the nest first
 mof carried her first flag through the whole nest
 mof learned what a real flag looks like
+mori started guarding the nest
 ```
 
 More incidents are expected.
@@ -1037,6 +1313,8 @@ More incidents are expected.
 Because every attack-defense team eventually creates some cursed little script that forwards flags.
 
 This one gets tests.
+
+And a cat.
 
 ```text
 ⁺‧₊˚ ཐི⋆♱⋆ཋྀ ˚₊‧⁺
