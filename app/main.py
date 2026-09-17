@@ -14,11 +14,13 @@ from app.api.health import (
 )
 from app.core import scheduler
 from app.db import database
+from app.db import events
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     database.initialize_database()
+    events.initialize_event_history()
 
     stop_event = asyncio.Event()
 

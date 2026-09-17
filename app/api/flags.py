@@ -22,6 +22,9 @@ from app.db.database import (
     has_flag,
     record_submission,
 )
+from app.db.events import (
+    record_event_safely,
+)
 
 
 router = APIRouter(
@@ -96,6 +99,14 @@ async def _process_valid_flag(
     source: str | None,
 ) -> dict[str, object]:
     if has_flag(flag):
+        record_event_safely(
+            "duplicate",
+            code="LOCAL",
+            state="terminal",
+            service=service,
+            source=source,
+        )
+
         return {
             "status": "duplicate",
             "code": "LOCAL",
@@ -120,6 +131,14 @@ async def _process_valid_flag(
         state=state,
         response_code=outcome.code,
         response_message=outcome.message,
+        service=service,
+        source=source,
+    )
+
+    record_event_safely(
+        "submission",
+        code=outcome.code,
+        state=state,
         service=service,
         source=source,
     )
@@ -173,6 +192,7 @@ async def submit_flag_batch(
     results = []
 
     seen: set[str] = set()
+
     first_results: dict[
         str,
         dict[str, object],
@@ -187,6 +207,14 @@ async def submit_flag_batch(
             )
 
         except ValueError as exc:
+            record_event_safely(
+                "invalid",
+                code="INVALID_FORMAT",
+                state="rejected",
+                service=submission.service,
+                source=submission.source,
+            )
+
             result = {
                 "index": index,
                 "status": "invalid",
@@ -204,6 +232,14 @@ async def submit_flag_batch(
             first_result = first_results[
                 flag
             ]
+
+            record_event_safely(
+                "duplicate",
+                code="BATCH",
+                state="local",
+                service=submission.service,
+                source=submission.source,
+            )
 
             result = {
                 "index": index,

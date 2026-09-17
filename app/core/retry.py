@@ -12,6 +12,9 @@ from app.db.database import (
     claim_due_retryable_submission,
     record_claimed_submission,
 )
+from app.db.events import (
+    record_event_safely,
+)
 
 
 @dataclass
@@ -91,6 +94,26 @@ async def retry_pending_once(
             service=candidate.service,
             source=candidate.source,
         )
+
+        if recorded:
+            record_event_safely(
+                "retry",
+                code=outcome.code,
+                state=state,
+                service=candidate.service,
+                source=candidate.source,
+                worker_id=worker_id,
+            )
+
+        else:
+            record_event_safely(
+                "retry_stale",
+                code=outcome.code,
+                state="rejected",
+                service=candidate.service,
+                source=candidate.source,
+                worker_id=worker_id,
+            )
 
         attempts.append(
             RetryAttempt(

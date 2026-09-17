@@ -1,9 +1,12 @@
+import logging
 import sqlite3
 from dataclasses import dataclass
 from datetime import datetime, timezone
 
 from app.db import database
 
+
+logger = logging.getLogger(__name__)
 
 MAX_RECENT_EVENTS = 500
 
@@ -115,6 +118,33 @@ def record_event(
         )
 
     return event_id
+
+
+def record_event_safely(
+    event_type: str,
+    *,
+    code: str | None = None,
+    state: str | None = None,
+    service: str | None = None,
+    source: str | None = None,
+    worker_id: str | None = None,
+) -> int | None:
+    try:
+        return record_event(
+            event_type,
+            code=code,
+            state=state,
+            service=service,
+            source=source,
+            worker_id=worker_id,
+        )
+
+    except sqlite3.Error:
+        logger.exception(
+            "MORI could not write an event to the scrapbook"
+        )
+
+        return None
 
 
 def get_recent_events(

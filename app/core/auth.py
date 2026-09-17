@@ -1,6 +1,13 @@
 import hmac
 
-from fastapi import HTTPException, Request
+from fastapi import (
+    HTTPException,
+    Request,
+)
+
+from app.db.events import (
+    record_event_safely,
+)
 
 
 async def require_api_token(
@@ -13,6 +20,13 @@ async def require_api_token(
     )
 
     if authorization is None:
+        record_event_safely(
+            "auth_rejected",
+            code="MISSING",
+            state="rejected",
+            source="api",
+        )
+
         raise HTTPException(
             status_code=401,
             detail=(
@@ -20,12 +34,12 @@ async def require_api_token(
                 "at the nest entrance"
             ),
             headers={
-                "WWW-Authenticate": "Bearer",
+                "WWW-Authenticate": "Bearer"
             },
         )
 
-    scheme, separator, token = authorization.partition(
-        " "
+    scheme, separator, token = (
+        authorization.partition(" ")
     )
 
     if (
@@ -33,13 +47,21 @@ async def require_api_token(
         or not separator
         or not token
     ):
+        record_event_safely(
+            "auth_rejected",
+            code="MALFORMED",
+            state="rejected",
+            source="api",
+        )
+
         raise HTTPException(
             status_code=401,
             detail=(
-                "MORI swatted away malformed authorization"
+                "MORI swatted away malformed "
+                "authorization"
             ),
             headers={
-                "WWW-Authenticate": "Bearer",
+                "WWW-Authenticate": "Bearer"
             },
         )
 
@@ -47,11 +69,18 @@ async def require_api_token(
         expected_token = get_api_token()
 
     except RuntimeError as exc:
+        record_event_safely(
+            "auth_rejected",
+            code="SERVER_TOKEN_MISSING",
+            state="error",
+            source="api",
+        )
+
         raise HTTPException(
             status_code=503,
             detail=(
-                "MORI cannot guard the nest because "
-                "MOTH_API_TOKEN is missing"
+                "MORI cannot guard the nest "
+                "because MOTH_API_TOKEN is missing"
             ),
         ) from exc
 
@@ -59,12 +88,20 @@ async def require_api_token(
         token,
         expected_token,
     ):
+        record_event_safely(
+            "auth_rejected",
+            code="UNKNOWN",
+            state="rejected",
+            source="api",
+        )
+
         raise HTTPException(
             status_code=401,
             detail=(
-                "MORI does not recognize this visitor"
+                "MORI does not recognize "
+                "this visitor"
             ),
             headers={
-                "WWW-Authenticate": "Bearer",
+                "WWW-Authenticate": "Bearer"
             },
         )
