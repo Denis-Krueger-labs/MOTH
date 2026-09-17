@@ -1,4 +1,5 @@
 from dataclasses import dataclass
+from uuid import uuid4
 
 from app.core.config import (
     get_submission_host,
@@ -11,10 +12,11 @@ from app.core.submitter import (
     submit_flag as submit_to_gameserver,
 )
 from app.db.database import (
+    DEFAULT_RETRY_LEASE_SECONDS,
     RETRYABLE_STATE,
     TERMINAL_STATE,
-    get_due_retryable_submissions,
-    record_submission,
+    claim_due_retryable_submission,
+    record_claimed_submission,
 )
 
 
@@ -33,18 +35,54 @@ class RetryAttempt:
     state: str
     code: str
     message: str | None
+    recorded: bool
+
+
+def _new_worker_id() -> str:
+    return f"retry-{uuid4().hex}"
 
 
 async def retry_pending_once(
     limit: int = 100,
+    worker_id: str | None = None,
+    lease_seconds: int = DEFAULT_RETRY_LEASE_SECONDS,
 ) -> list[RetryAttempt]:
-    candidates = get_due_retryable_submissions(
-        limit=limit,
-    )
+    if limit <= 0:
+        raise ValueError(
+            "mof needs a positive retry worker limit"
+        )
+
+    if worker_id is None:
+        worker_id = _new_worker_id()
+
+    worker_id = worker_id.strip()
+
+    if not worker_id:
+        raise ValueError(
+            "MORI refuses to run an unnamed retry worker"
+        )
+
+    if lease_seconds <= 0:
+        raise ValueError(
+            "MORI requires a positive retry lease duration"
+        )
 
     attempts = []
 
-    for candidate in candidates:
+    for _ in range(limit):
+        candidate = claim_due_retryable_submission(
+            worker_id,
+            lease_seconds=lease_seconds,
+        )
+
+        if candidate is None:
+            break
+
+        if candidate.lease_token is None:
+            raise RuntimeError(
+                "MORI issued a retry claim without a fencing token"
+            )
+
         try:
             result = await submit_to_gameserver(
                 candidate.flag,
@@ -54,78 +92,36 @@ async def retry_pending_once(
             )
 
         except SubmissionTimeoutError as exc:
-            record_submission(
-                candidate.flag,
-                state=RETRYABLE_STATE,
-                response_code="TIMEOUT",
-                response_message=str(exc),
-                service=candidate.service,
-                source=candidate.source,
-            )
-
-            attempts.append(
-                RetryAttempt(
-                    record_id=candidate.id,
-                    state=RETRYABLE_STATE,
-                    code="TIMEOUT",
-                    message=str(exc),
-                )
-            )
-
-            continue
+            state = RETRYABLE_STATE
+            code = "TIMEOUT"
+            message = str(exc)
 
         except SubmissionConnectionError as exc:
-            record_submission(
-                candidate.flag,
-                state=RETRYABLE_STATE,
-                response_code="CONNECTION_ERROR",
-                response_message=str(exc),
-                service=candidate.service,
-                source=candidate.source,
-            )
-
-            attempts.append(
-                RetryAttempt(
-                    record_id=candidate.id,
-                    state=RETRYABLE_STATE,
-                    code="CONNECTION_ERROR",
-                    message=str(exc),
-                )
-            )
-
-            continue
+            state = RETRYABLE_STATE
+            code = "CONNECTION_ERROR"
+            message = str(exc)
 
         except ValueError as exc:
-            record_submission(
-                candidate.flag,
-                state=RETRYABLE_STATE,
-                response_code="PROTOCOL_ERROR",
-                response_message=str(exc),
-                service=candidate.service,
-                source=candidate.source,
-            )
-
-            attempts.append(
-                RetryAttempt(
-                    record_id=candidate.id,
-                    state=RETRYABLE_STATE,
-                    code="PROTOCOL_ERROR",
-                    message=str(exc),
-                )
-            )
-
-            continue
-
-        if result.code in TERMINAL_SUBMISSION_CODES:
-            state = TERMINAL_STATE
-        else:
             state = RETRYABLE_STATE
+            code = "PROTOCOL_ERROR"
+            message = str(exc)
 
-        record_submission(
+        else:
+            code = result.code
+            message = result.message
+
+            if code in TERMINAL_SUBMISSION_CODES:
+                state = TERMINAL_STATE
+            else:
+                state = RETRYABLE_STATE
+
+        recorded = record_claimed_submission(
             candidate.flag,
+            worker_id,
+            candidate.lease_token,
             state=state,
-            response_code=result.code,
-            response_message=result.message,
+            response_code=code,
+            response_message=message,
             service=candidate.service,
             source=candidate.source,
         )
@@ -134,9 +130,13 @@ async def retry_pending_once(
             RetryAttempt(
                 record_id=candidate.id,
                 state=state,
-                code=result.code,
-                message=result.message,
+                code=code,
+                message=message,
+                recorded=recorded,
             )
         )
+
+        if not recorded:
+            break
 
     return attempts
