@@ -13,7 +13,7 @@ from app.core.submitter import (
 from app.db.database import (
     RETRYABLE_STATE,
     TERMINAL_STATE,
-    get_retryable_submissions,
+    get_due_retryable_submissions,
     record_submission,
 )
 
@@ -38,7 +38,7 @@ class RetryAttempt:
 async def retry_pending_once(
     limit: int = 100,
 ) -> list[RetryAttempt]:
-    candidates = get_retryable_submissions(
+    candidates = get_due_retryable_submissions(
         limit=limit,
     )
 
