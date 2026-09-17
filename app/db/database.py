@@ -1,4 +1,5 @@
 import os
+import secrets
 import sqlite3
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
@@ -44,6 +45,7 @@ class RetryCandidate:
     last_attempt_at: str | None
     lease_owner: str | None
     lease_until: str | None
+    lease_token: str | None
 
 
 def _utc_now() -> str:
@@ -151,6 +153,10 @@ def _ensure_columns(
             "ALTER TABLE flags "
             "ADD COLUMN lease_until TEXT"
         ),
+        "lease_token": (
+            "ALTER TABLE flags "
+            "ADD COLUMN lease_token TEXT"
+        ),
     }
 
     for column, statement in migrations.items():
@@ -180,7 +186,8 @@ def initialize_database() -> None:
                 next_retry_at TEXT,
                 last_attempt_at TEXT,
                 lease_owner TEXT,
-                lease_until TEXT
+                lease_until TEXT,
+                lease_token TEXT
             )
             """
         )
@@ -348,10 +355,11 @@ def record_submission(
                 next_retry_at,
                 last_attempt_at,
                 lease_owner,
-                lease_until
+                lease_until,
+                lease_token
             )
             VALUES (
-                ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
+                ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
             )
 
             ON CONFLICT(flag_fingerprint)
@@ -374,7 +382,8 @@ def record_submission(
                 next_retry_at = excluded.next_retry_at,
                 last_attempt_at = excluded.last_attempt_at,
                 lease_owner = NULL,
-                lease_until = NULL
+                lease_until = NULL,
+                lease_token = NULL
             """,
             (
                 ciphertext,
@@ -392,8 +401,196 @@ def record_submission(
                 now,
                 None,
                 None,
+                None,
             ),
         )
+
+
+def record_claimed_submission(
+    flag: str,
+    worker_id: str,
+    lease_token: str,
+    *,
+    state: str,
+    response_code: str | None = None,
+    response_message: str | None = None,
+    service: str | None = None,
+    source: str | None = None,
+) -> bool:
+    if state not in VALID_SUBMISSION_STATES:
+        raise ValueError(
+            "mof does not recognize this submission state"
+        )
+
+    worker_id = worker_id.strip()
+    lease_token = lease_token.strip()
+
+    if not worker_id:
+        raise ValueError(
+            "MORI refuses results from an unnamed worker"
+        )
+
+    if not lease_token:
+        raise ValueError(
+            "MORI refuses results without a lease token"
+        )
+
+    fingerprint = fingerprint_flag(flag)
+    nonce, ciphertext = encrypt_flag(flag)
+    now = _utc_now()
+
+    with sqlite3.connect(
+        DATABASE_PATH,
+        isolation_level=None,
+    ) as connection:
+        connection.row_factory = sqlite3.Row
+
+        connection.execute(
+            "BEGIN IMMEDIATE"
+        )
+
+        try:
+            existing = connection.execute(
+                """
+                SELECT
+                    retry_count,
+                    created_at,
+                    lease_owner,
+                    lease_until,
+                    lease_token
+                FROM flags
+                WHERE flag_fingerprint = ?
+                  AND submission_state = ?
+                  AND lease_owner = ?
+                  AND lease_token = ?
+                LIMIT 1
+                """,
+                (
+                    fingerprint,
+                    RETRYABLE_STATE,
+                    worker_id,
+                    lease_token,
+                ),
+            ).fetchone()
+
+            if existing is None:
+                connection.execute(
+                    "COMMIT"
+                )
+
+                return False
+
+            lease_until = existing[
+                "lease_until"
+            ]
+
+            if (
+                lease_until is None
+                or lease_until <= now
+            ):
+                connection.execute(
+                    "COMMIT"
+                )
+
+                return False
+
+            previous_retry_count = (
+                existing["retry_count"] or 0
+            )
+
+            created_at = (
+                existing["created_at"]
+                or now
+            )
+
+            if state == RETRYABLE_STATE:
+                retry_count = (
+                    previous_retry_count + 1
+                )
+
+                delay = _retry_delay_seconds(
+                    retry_count
+                )
+
+                next_retry_at = _add_seconds(
+                    now,
+                    delay,
+                )
+
+            else:
+                retry_count = previous_retry_count
+                next_retry_at = None
+
+            result = connection.execute(
+                """
+                UPDATE flags
+                SET
+                    flag_ciphertext = ?,
+                    flag_nonce = ?,
+                    submission_state = ?,
+                    response_code = ?,
+                    response_message = ?,
+                    service = COALESCE(
+                        ?,
+                        service
+                    ),
+                    source = COALESCE(
+                        ?,
+                        source
+                    ),
+                    created_at = ?,
+                    updated_at = ?,
+                    retry_count = ?,
+                    next_retry_at = ?,
+                    last_attempt_at = ?,
+                    lease_owner = NULL,
+                    lease_until = NULL,
+                    lease_token = NULL
+                WHERE flag_fingerprint = ?
+                  AND submission_state = ?
+                  AND lease_owner = ?
+                  AND lease_token = ?
+                  AND lease_until > ?
+                """,
+                (
+                    ciphertext,
+                    nonce,
+                    state,
+                    response_code,
+                    response_message,
+                    service,
+                    source,
+                    created_at,
+                    now,
+                    retry_count,
+                    next_retry_at,
+                    now,
+                    fingerprint,
+                    RETRYABLE_STATE,
+                    worker_id,
+                    lease_token,
+                    now,
+                ),
+            )
+
+            if result.rowcount != 1:
+                connection.execute(
+                    "ROLLBACK"
+                )
+
+                return False
+
+            connection.execute(
+                "COMMIT"
+            )
+
+            return True
+
+        except Exception:
+            connection.execute(
+                "ROLLBACK"
+            )
+            raise
 
 
 def get_submission_record(
@@ -454,6 +651,7 @@ def _row_to_retry_candidate(
         last_attempt_at=row["last_attempt_at"],
         lease_owner=row["lease_owner"],
         lease_until=row["lease_until"],
+        lease_token=row["lease_token"],
     )
 
 
@@ -495,7 +693,8 @@ def get_retryable_submissions(
                 next_retry_at,
                 last_attempt_at,
                 lease_owner,
-                lease_until
+                lease_until,
+                lease_token
             FROM flags
             WHERE submission_state = ?
             ORDER BY
@@ -543,7 +742,8 @@ def get_due_retryable_submissions(
                 next_retry_at,
                 last_attempt_at,
                 lease_owner,
-                lease_until
+                lease_until,
+                lease_token
             FROM flags
             WHERE submission_state = ?
               AND (
@@ -587,10 +787,13 @@ def claim_due_retryable_submission(
         )
 
     now = _utc_now()
+
     lease_until = _add_seconds(
         now,
         lease_seconds,
     )
+
+    lease_token = secrets.token_urlsafe(32)
 
     with sqlite3.connect(
         DATABASE_PATH,
@@ -642,7 +845,8 @@ def claim_due_retryable_submission(
                 UPDATE flags
                 SET
                     lease_owner = ?,
-                    lease_until = ?
+                    lease_until = ?,
+                    lease_token = ?
                 WHERE id = ?
                   AND submission_state = ?
                   AND (
@@ -657,6 +861,7 @@ def claim_due_retryable_submission(
                 (
                     worker_id,
                     lease_until,
+                    lease_token,
                     record_id,
                     RETRYABLE_STATE,
                     now,
@@ -687,7 +892,8 @@ def claim_due_retryable_submission(
                     next_retry_at,
                     last_attempt_at,
                     lease_owner,
-                    lease_until
+                    lease_until,
+                    lease_token
                 FROM flags
                 WHERE id = ?
                 LIMIT 1
