@@ -1,86 +1,90 @@
 # MOTH Team Usage Guide
 
-This document is the internal operator guide for the TTZ FAUST CTF team.
+This is the internal operator and developer runbook for the TTZ FAUST CTF team.
 
 It may contain operational details that should not be copied into the public GitHub repository before the competition.
 
+For implementation details and concurrency rationale, use `docs/ARCHITECTURE.md`.
+
 ```text
 /•᷅‎‎•᷄\੭
-
 MORI checks you first.
 
 ཐི༏ཋྀ
-
 Then Mof takes the flag.
 ```
 
 ---
 
-## Quick Start
+## Quick start
 
-Activate the environment:
+Activate the virtual environment:
 
 ```powershell
 .\.venv\Scripts\Activate.ps1
 ```
 
-Start MOTH:
+Run the test suite before operational changes:
+
+```powershell
+pytest -q
+```
+
+Start MOTH for local development:
 
 ```powershell
 uvicorn app.main:app --reload
 ```
 
-Run tests before operational changes:
+For quieter local stress testing:
 
 ```powershell
-pytest -v
+uvicorn app.main:app --no-access-log --log-level warning
 ```
 
-Expected current result:
-
-```text
-31 passed
-```
+Do not use development reload mode for final competition deployment unless that choice is intentional.
 
 ---
 
-## Required Configuration
+## Configuration
 
-MOTH expects configuration through environment variables.
+Core environment variables:
 
 ```text
 MOTH_DB_KEY
 MOTH_API_TOKEN
-
 MOTH_SUBMISSION_HOST
 MOTH_SUBMISSION_PORT
 MOTH_SUBMISSION_TIMEOUT
 ```
 
-Local development uses `.env`.
+Optional database override:
 
-Never commit `.env`.
+```text
+MOTH_DB_PATH
+```
 
-### Example development `.env`
+Local development may use `.env`.
+
+Never commit `.env` or real competition secrets.
+
+### Example local `.env`
 
 ```text
 MOTH_DB_KEY=<local-development-key>
 MOTH_API_TOKEN=<local-development-token>
-
 MOTH_SUBMISSION_HOST=127.0.0.1
 MOTH_SUBMISSION_PORT=6666
 MOTH_SUBMISSION_TIMEOUT=5.0
 ```
 
-Competition values belong in the deployment environment, not in Git.
+Competition values belong in the deployment environment.
 
 ---
 
-## Generate Secrets
+## Generate an API token
 
-### API token
-
-Generate a new token locally:
+Generate locally:
 
 ```powershell
 python -c "import secrets; print(secrets.token_urlsafe(32))"
@@ -92,67 +96,53 @@ Store it as:
 MOTH_API_TOKEN=<generated-token>
 ```
 
-### Database key
+Use separate key material for the database encryption key.
 
-Use a separately generated database key.
+Do not reuse the API token as `MOTH_DB_KEY`.
 
-Do not reuse the API token.
-
-Do not give `MOTH_DB_KEY` to exploit scripts or teammates who only need API access.
+Do not give the database key to exploit scripts that only need API access.
 
 ---
 
 ## Authentication
 
-Every protected request uses:
+Protected requests use:
 
-```text
+```http
 Authorization: Bearer <MOTH_API_TOKEN>
 ```
 
-Missing token:
+Expected authentication failures:
 
-```text
-401
-MORI found no authorization at the nest entrance
-```
-
-Wrong token:
-
-```text
-401
-MORI does not recognize this visitor
-```
-
-Malformed authentication:
-
-```text
-401
-MORI swatted away malformed authorization
-```
-
-If the server itself has no API token configured:
-
-```text
-503
-```
+| Situation | Expected HTTP status |
+| --- | ---: |
+| missing token | 401 |
+| wrong token | 401 |
+| malformed authorization | 401 |
+| server has no API token configured | 503 |
 
 MORI fails closed.
 
 ---
 
-## Submit a Flag Manually
-
-PowerShell:
+## Load the local API token in PowerShell
 
 ```powershell
 $token = (
     Get-Content .env |
-    Where-Object { $_ -like "MOTH_API_TOKEN=*" }
+    Where-Object {
+        $_ -like "MOTH_API_TOKEN=*"
+    }
 ).Split("=", 2)[1]
 ```
 
-Create a request:
+Avoid printing the token unnecessarily.
+
+---
+
+## Submit one flag manually
+
+Create a request body:
 
 ```powershell
 $body = @{
@@ -162,7 +152,7 @@ $body = @{
 } | ConvertTo-Json
 ```
 
-Submit:
+Submit it:
 
 ```powershell
 Invoke-RestMethod `
@@ -175,21 +165,96 @@ Invoke-RestMethod `
     -Body $body
 ```
 
-Successful result:
+---
+
+## Single-flag responses
+
+### Accepted
+
+```json
+{
+  "status": "submitted",
+  "code": "OK",
+  "message": "accepted",
+  "remembered": true
+}
+```
+
+### Local terminal duplicate
+
+```json
+{
+  "status": "duplicate",
+  "code": "LOCAL",
+  "message": "mof has already seen this offering",
+  "remembered": true
+}
+```
+
+Do not submit the same terminal flag again.
+
+### Existing retryable flag
+
+```json
+{
+  "status": "queued",
+  "code": "LOCAL_RETRY",
+  "message": "mof already has this offering queued for retry",
+  "remembered": false
+}
+```
+
+The retry scheduler already owns the work.
+
+### Same flag currently in flight
+
+```json
+{
+  "status": "in_flight",
+  "code": "IN_FLIGHT",
+  "message": "MORI is already guarding this offering while mof submits it",
+  "remembered": false
+}
+```
+
+Do not race the existing request.
+
+### Local overload
+
+Expected:
 
 ```text
-status     code message  remembered
-------     ---- -------  ----------
-submitted OK   accepted       True
+503 Service Unavailable
+Retry-After: 1
 ```
+
+Wait and retry later.
+
+### Gameserver connection failure
+
+Expected:
+
+```text
+502 Bad Gateway
+```
+
+The attempt remains retryable.
+
+### Gameserver timeout
+
+Expected:
+
+```text
+504 Gateway Timeout
+```
+
+The attempt remains retryable.
 
 ---
 
-## Exploit Script Integration
+## Exploit integration
 
-An exploit only needs to perform an authenticated HTTP POST.
-
-Generic Python example:
+Exploit code should perform a small authenticated HTTP request and let MOTH own submission state.
 
 ```python
 import os
@@ -218,21 +283,91 @@ def submit_flag(
             "service": service,
             "source": source,
         },
-        timeout=5.0,
+        timeout=10.0,
     )
 
-    response.raise_for_status()
+    if response.status_code == 503:
+        retry_after = response.headers.get(
+            "Retry-After",
+            "1",
+        )
+        raise RuntimeError(
+            "MOTH temporarily unavailable; "
+            f"retry after {retry_after} second(s)"
+        )
 
+    response.raise_for_status()
     return response.json()
 ```
 
-Do not hardcode the API token directly into exploit repositories.
-
-Use the runtime environment.
+Do not hardcode API tokens into exploit repositories.
 
 ---
 
-## Supported Flag Shape
+## Batch submission
+
+Endpoint:
+
+```http
+POST /api/flags/batch
+```
+
+A batch accepts at most 500 flags.
+
+Example:
+
+```powershell
+$batch = @{
+    flags = @(
+        "FAUST_AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+        "FAUST_BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB"
+    )
+    service = "achat"
+    source = "exploit-achat"
+} | ConvertTo-Json
+
+Invoke-RestMethod `
+    -Uri "http://127.0.0.1:8000/api/flags/batch" `
+    -Method Post `
+    -ContentType "application/json" `
+    -Headers @{
+        Authorization = "Bearer $token"
+    } `
+    -Body $batch
+```
+
+MOTH validates each item independently, deduplicates repeated entries inside the request, preserves result order, and does not return plaintext flags in the result objects.
+
+### Example summary
+
+```json
+{
+  "received": 10,
+  "accepted": 7,
+  "duplicate": 1,
+  "terminal_other": 0,
+  "retryable": 1,
+  "invalid": 0,
+  "in_flight": 0,
+  "overloaded": 1
+}
+```
+
+### Summary fields
+
+| Field | Meaning |
+| --- | --- |
+| `accepted` | gameserver returned `OK` |
+| `duplicate` | local, batch-local, or gameserver duplicate |
+| `terminal_other` | terminal result other than `OK` or `DUP` |
+| `retryable` | unfinished work remains retryable |
+| `invalid` | input failed FAUST flag validation |
+| `in_flight` | another request currently owns the same flag |
+| `overloaded` | MOTH had no available submission capacity |
+
+---
+
+## Supported flag shape
 
 ```text
 FAUST_[A-Za-z0-9/+]{32}
@@ -244,181 +379,67 @@ Example:
 FAUST_AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA
 ```
 
-Malformed authenticated flags receive HTTP `422`.
-
 ---
 
-## Response Handling
+## Dashboard access
 
-### Successful submission
+Dashboard routes use the same bearer token.
 
-```json
-{
-  "status": "submitted",
-  "code": "OK",
-  "message": "accepted",
-  "remembered": true
-}
+### Statistics
+
+```http
+GET /api/dashboard/stats
 ```
-
-### Local duplicate
-
-```json
-{
-  "status": "duplicate",
-  "code": "LOCAL",
-  "message": "mof has already seen this offering",
-  "remembered": true
-}
-```
-
-No second backend submission occurs.
-
-### Retryable backend result
-
-Example:
-
-```json
-{
-  "status": "submitted",
-  "code": "ERR",
-  "message": "try again later",
-  "remembered": false
-}
-```
-
-The flag remains retryable.
-
-### Connection failure
-
-```text
-502 Bad Gateway
-```
-
-The flag is not permanently remembered.
-
-### Backend timeout
-
-```text
-504 Gateway Timeout
-```
-
-The flag is not permanently remembered.
-
----
-
-## Local Fake Gameserver
-
-Use this during development instead of contacting competition infrastructure.
 
 ```powershell
-@'
-import asyncio
-
-
-async def handle_client(reader, writer):
-    print("mof arrived at fake gameserver")
-
-    writer.write(
-        b"Welcome to fake moth gameserver\n\n"
-    )
-    await writer.drain()
-
-    flag = await reader.readline()
-    flag_text = flag.decode().strip()
-
-    print("received:", flag_text)
-
-    writer.write(
-        f"{flag_text} OK accepted\n".encode()
-    )
-    await writer.drain()
-
-    writer.close()
-    await writer.wait_closed()
-
-
-async def main():
-    server = await asyncio.start_server(
-        handle_client,
-        "127.0.0.1",
-        6666,
-    )
-
-    print(
-        "fake gameserver listening "
-        "on 127.0.0.1:6666"
-    )
-
-    async with server:
-        await server.serve_forever()
-
-
-asyncio.run(main())
-'@ | python -
+Invoke-RestMethod `
+    -Uri "http://127.0.0.1:8000/api/dashboard/stats" `
+    -Headers @{
+        Authorization = "Bearer $token"
+    }
 ```
 
----
+### Recent activity
 
-## Fake Silent Backend
-
-For timeout testing:
+```http
+GET /api/dashboard/recent?limit=20
+```
 
 ```powershell
-@'
-import asyncio
-
-
-async def handle_client(reader, writer):
-    print(
-        "mof connected, pretending to be asleep"
-    )
-
-    await asyncio.sleep(60)
-
-    writer.close()
-    await writer.wait_closed()
-
-
-async def main():
-    server = await asyncio.start_server(
-        handle_client,
-        "127.0.0.1",
-        6666,
-    )
-
-    print(
-        "sleepy gameserver listening "
-        "on 127.0.0.1:6666"
-    )
-
-    async with server:
-        await server.serve_forever()
-
-
-asyncio.run(main())
-'@ | python -
+Invoke-RestMethod `
+    -Uri "http://127.0.0.1:8000/api/dashboard/recent?limit=20" `
+    -Headers @{
+        Authorization = "Bearer $token"
+    }
 ```
 
-Expected API behavior:
+Recent activity should not be treated as a flag viewer.
 
-```text
-504 Gateway Timeout
+### Operational health
+
+```http
+GET /api/dashboard/health
 ```
 
-The same flag should remain eligible for retry afterward.
+Use this for scheduler and retry-queue state.
+
+### Gameserver connectivity
+
+```http
+GET /api/dashboard/connectivity
+```
+
+Use this only when an explicit live connectivity check is wanted.
 
 ---
 
-## Health Endpoint
+## Basic application health
 
-Current health endpoint:
-
-```text
+```http
 GET /api/health
 ```
 
-Current development response:
+Typical local response:
 
 ```json
 {
@@ -428,13 +449,134 @@ Current development response:
 }
 ```
 
-Note that health endpoint authentication behavior may evolve as deployment design is finalized.
+---
+
+## Local fake gameserver
+
+Start the provided fake server:
+
+```powershell
+python -m tools.fake_gameserver --delay-ms 0
+```
+
+Simulate a slower backend:
+
+```powershell
+python -m tools.fake_gameserver --delay-ms 1000
+```
+
+The fake server is for local development only.
+
+Do not point local stress tooling at competition infrastructure.
 
 ---
 
-## Competition Deployment
+## Same-flag race test
 
-### Final values
+The race tool starts its own fake gameserver.
+
+Stop any separately running fake server on port `6666` before running it.
+
+```powershell
+python -m tools.race_same_flag
+```
+
+Healthy output should show one gameserver submission for one logical flag even when many requests race.
+
+If the tool reports more than one gameserver submission, stop and investigate before competition use.
+
+---
+
+## Local stress testing
+
+Use a disposable database:
+
+```powershell
+$env:MOTH_DB_PATH = "stress_moth.db"
+```
+
+Start MOTH quietly:
+
+```powershell
+uvicorn app.main:app --no-access-log --log-level warning
+```
+
+### Health pressure
+
+```powershell
+python -m tools.stress_moth health `
+    --requests 2000 `
+    --concurrency 100
+```
+
+### Unique single-flag pressure
+
+```powershell
+python -m tools.stress_moth single `
+    --requests 500 `
+    --concurrency 100
+```
+
+Controlled `503` responses are valid overload behavior.
+
+Unexpected transport errors or HTTP `500` responses require investigation.
+
+### Batch pressure
+
+```powershell
+python -m tools.stress_moth batch `
+    --requests 4 `
+    --concurrency 4 `
+    --batch-size 250
+```
+
+---
+
+## Stress database cleanup
+
+Stop MOTH first.
+
+Then remove the disposable database:
+
+```powershell
+Remove-Item .\stress_moth.db* `
+    -ErrorAction SilentlyContinue
+```
+
+Remove the environment override:
+
+```powershell
+Remove-Item Env:MOTH_DB_PATH `
+    -ErrorAction SilentlyContinue
+```
+
+Do not delete the real competition database.
+
+---
+
+## Port `6666` already in use
+
+If the race tool reports Windows socket error `10048`, inspect the listener:
+
+```powershell
+Get-NetTCPConnection `
+    -LocalPort 6666 `
+    -ErrorAction SilentlyContinue
+```
+
+Inspect the owning process before terminating anything:
+
+```powershell
+Get-Process -Id <PID>
+```
+
+Only stop the process after confirming it is the disposable local fake gameserver.
+
+---
+
+## Competition deployment worksheet
+
+Fill these only after deployment design is finalized:
 
 ```text
 MOTH host:
@@ -452,6 +594,12 @@ TODO
 Transport:
 TODO
 
+Application process count:
+TODO
+
+Reverse proxy:
+TODO
+
 Startup method:
 TODO
 
@@ -460,15 +608,18 @@ TODO
 
 Log location:
 TODO
+
+Database backup location:
+TODO
 ```
 
-Fill these values only after the final deployment design is decided.
+The architecture document explains why process count and network controls matter. This guide only records the chosen operational values.
 
 ---
 
-## Team Token Distribution
+## Team token distribution
 
-Final token-distribution method:
+Final method:
 
 ```text
 TODO
@@ -476,48 +627,57 @@ TODO
 
 Requirements:
 
-* never post tokens into public repositories
-* never place tokens into screenshots
-* never embed tokens into exploit source
-* never reuse `MOTH_DB_KEY`
+* never publish tokens
+* never place tokens in screenshots
+* never embed tokens directly in exploit source
+* never reuse `MOTH_DB_KEY` as the API token
 * rotate the API token if exposure is suspected
 
 ---
 
-## Competition-Day Startup Checklist
+## Competition-day startup checklist
 
 ```text
 [ ] Correct private branch checked out
 [ ] Working tree clean
 [ ] Latest TTZ changes pulled
-[ ] Tests passing
+[ ] Test suite passing
 [ ] MOTH_DB_KEY configured
 [ ] MOTH_API_TOKEN configured
 [ ] Submission host configured
 [ ] Submission port configured
-[ ] Timeout configured
+[ ] Submission timeout configured
+[ ] Correct database path confirmed
 [ ] Correct network path available
-[ ] MOTH API started
-[ ] Health endpoint checked
+[ ] MOTH started
+[ ] Basic health checked
 [ ] Authentication checked
-[ ] Test flag path checked where safe
+[ ] Dashboard health checked
+[ ] Gameserver connectivity checked
+[ ] Database writable
+[ ] Retry scheduler running
 [ ] Logs visible
+[ ] No secrets visible in logs
+[ ] Team knows the active MOTH endpoint
+[ ] Team knows how to handle Retry-After
 ```
 
 ---
 
-## Competition-Day Sanity Check
+## Competition-day sanity check
 
-Before teammates begin sending flags:
+Before teammates begin submitting flags:
 
-1. Verify MOTH is running.
-2. Verify MORI rejects a request with no token.
-3. Verify the correct token reaches flag validation.
-4. Verify submission backend connectivity.
-5. Verify the database is writable.
-6. Verify no secrets are printed into logs.
-7. Verify teammates know the current MOTH endpoint.
-8. Verify exploit scripts use environment variables for credentials.
+1. verify MOTH is running
+2. verify requests without credentials are rejected
+3. verify the real token reaches flag validation
+4. verify dashboard health
+5. verify gameserver connectivity explicitly
+6. verify the database is writable
+7. verify the retry scheduler is alive
+8. verify logs do not expose secrets
+9. verify exploit scripts use runtime credentials
+10. verify teammates know the active endpoint and overload behavior
 
 ---
 
@@ -525,77 +685,108 @@ Before teammates begin sending flags:
 
 ### `401`
 
-Likely causes:
+Check:
 
-* no Bearer token
-* wrong token
-* malformed Authorization header
-
-MORI has swatted the request.
+* bearer token present
+* token value correct
+* Authorization header well formed
 
 ### `422`
 
-Authentication succeeded, but the flag is malformed.
+Check:
 
-Check the FAUST flag shape.
+* flag shape
+* JSON structure
+* batch length
 
 ### `502`
 
-MOTH could not establish or maintain the backend connection.
-
 Check:
 
-* backend availability
+* gameserver availability
 * routing
 * configured host
 * configured port
 
-The flag remains retryable.
+The attempt remains retryable.
+
+### `503`
+
+Possible causes include:
+
+* server authentication configuration missing
+* submission capacity exhausted
+* stale initial claim result
+
+If a `Retry-After` header is present, respect it.
 
 ### `504`
 
-The backend connection was established but did not answer within the configured timeout.
+The gameserver did not answer before the configured timeout.
 
-The flag remains retryable.
+The attempt remains retryable.
 
-### Local duplicate
+### `LOCAL`
 
 MOTH already remembers the flag as terminal.
 
-It will not submit it again.
+### `LOCAL_RETRY`
+
+MOTH already owns the flag as retryable work.
+
+### `IN_FLIGHT`
+
+Another initial request currently owns the same flag.
+
+### `OVERLOADED`
+
+MOTH has no available submission capacity.
+
+Wait and retry.
 
 ### `MOTH_API_TOKEN is missing`
 
-The server authentication configuration is incomplete.
-
-MORI refuses to fail open.
+Server authentication configuration is incomplete.
 
 ### `MOTH_DB_KEY is missing`
 
 Database cryptographic configuration is incomplete.
 
-Do not replace the key casually if an existing encrypted database needs to remain readable.
+Do not casually replace the key if existing encrypted state must remain readable.
+
+### `database is locked`
+
+Repeated lock errors require investigation.
+
+Check:
+
+* current load
+* application process count
+* unexpected competing writers
+* database path
+* long-running local tools
+
+Do not respond by blindly increasing concurrency.
 
 ---
 
-## Logs and Secrets
+## Logs and sensitive data
 
-Do not log:
+Do not log or publish:
 
 ```text
 MOTH_API_TOKEN
 MOTH_DB_KEY
 Authorization headers
 private SSH keys
+plaintext captured flags
 ```
 
 Treat captured flags as sensitive competition data.
 
-Avoid unnecessary plaintext exposure.
-
 ---
 
-## Database
+## Database handling
 
 Default local database:
 
@@ -603,25 +794,29 @@ Default local database:
 moth.db
 ```
 
-This file is ignored by Git.
+Optional override:
 
-Do not commit it.
+```text
+MOTH_DB_PATH
+```
 
-The current database stores encrypted flag material and keyed fingerprints.
+Do not commit database files.
 
-Future versions will add richer submission state.
+Do not run load tests against the competition database.
+
+Do not delete or rotate cryptographic state during competition unless the failure is understood.
 
 ---
 
-## Git Workflow
+## Git workflow
 
-Active private repository:
+Active private remote:
 
 ```text
 ttz
 ```
 
-Public snapshot:
+Public snapshot remote:
 
 ```text
 origin
@@ -634,17 +829,16 @@ git status
 git pull
 ```
 
-After testing:
+After changes:
 
 ```powershell
-git add .
-git commit -m "mof did something suspiciously functional"
-git push
+pytest -q
+git status
 ```
 
-Plain `git push` should target TTZ.
+Stage only intended files, commit, then push normally to the tracked TTZ branch.
 
-Never casually run:
+Do not casually run:
 
 ```powershell
 git push origin main
@@ -654,11 +848,9 @@ during private competition development.
 
 ---
 
-## Signed Commits
+## Signed commits
 
-Future MOTH commits should be SSH-signed.
-
-Verify repository configuration:
+Verify repository signing configuration:
 
 ```powershell
 git config --get gpg.format
@@ -666,36 +858,30 @@ git config --get user.signingkey
 git config --get commit.gpgsign
 ```
 
-Expected:
+Expected shape:
 
 ```text
 ssh
-<SSH signing public key>
+<SSH signing key>
 true
 ```
 
-Do not share the private signing key.
+Never share the private signing key.
 
 ---
 
-## After the Competition
+## Publishing after the competition
 
-Once FAUST is over, we can decide what to publish back to the public repository.
+Review private history before publishing anything back to the public repository.
 
-Possible post-competition publication:
+Possible sanitized material includes:
 
-* final architecture
-* operational lessons
-* deployment design
+* architecture
+* hardening results
 * failure modes
-* interesting bugs
-* benchmarks
-* retrospective
-* cleaned competition runbook
-
-Do not automatically push the private TTZ history to GitHub.
-
-Review it first.
+* operational lessons
+* sanitized tooling
+* deployment retrospective
 
 ```text
 /•᷅‎‎•᷄\੭
@@ -706,19 +892,33 @@ review before publishing.
 
 ---
 
-## Emergency Rule
+## Emergency rule
 
-If something looks wrong and you are not sure whether MOTH is safely submitting flags:
+If MOTH behavior becomes unclear during competition:
 
 ```text
 stop sending new traffic
+check dashboard health
 check logs
+check gameserver connectivity
 check configuration
-check network connectivity
+check retry state
+check database state
 check with the team
 ```
 
-Do not blindly restart, rotate keys, delete the database, or change submission state during the competition without understanding what failed.
+Do not blindly:
+
+```text
+restart repeatedly
+rotate encryption keys
+delete the database
+edit retry state
+increase process count
+increase concurrency
+```
+
+without understanding what failed.
 
 Mof is small.
 
