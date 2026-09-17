@@ -4,9 +4,14 @@ from fastapi import (
     APIRouter,
     Depends,
     Query,
+    Request,
 )
 
 from app.core.auth import require_api_token
+from app.core.operational_health import (
+    get_operational_health,
+    probe_submission_server,
+)
 from app.db.dashboard import (
     get_dashboard_stats,
 )
@@ -48,3 +53,17 @@ async def dashboard_recent(
             for event in events
         ],
     }
+
+
+@router.get("/health")
+async def dashboard_health(
+    request: Request,
+):
+    return get_operational_health(
+        request.app
+    )
+
+
+@router.get("/connectivity")
+async def dashboard_connectivity():
+    return await probe_submission_server()
