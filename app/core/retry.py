@@ -1,14 +1,8 @@
 from dataclasses import dataclass
 from uuid import uuid4
 
-from app.core.config import (
-    get_submission_host,
-    get_submission_port,
-    get_submission_timeout,
-)
+from app.core.submission_service import submit_once
 from app.core.submitter import (
-    SubmissionConnectionError,
-    SubmissionTimeoutError,
     submit_flag as submit_to_gameserver,
 )
 from app.db.database import (
@@ -18,15 +12,6 @@ from app.db.database import (
     claim_due_retryable_submission,
     record_claimed_submission,
 )
-
-
-TERMINAL_SUBMISSION_CODES = {
-    "OK",
-    "DUP",
-    "OWN",
-    "OLD",
-    "INV",
-}
 
 
 @dataclass
@@ -70,9 +55,11 @@ async def retry_pending_once(
     attempts = []
 
     for _ in range(limit):
-        candidate = claim_due_retryable_submission(
-            worker_id,
-            lease_seconds=lease_seconds,
+        candidate = (
+            claim_due_retryable_submission(
+                worker_id,
+                lease_seconds=lease_seconds,
+            )
         )
 
         if candidate is None:
@@ -80,48 +67,27 @@ async def retry_pending_once(
 
         if candidate.lease_token is None:
             raise RuntimeError(
-                "MORI issued a retry claim without a fencing token"
+                "MORI issued a retry claim "
+                "without a fencing token"
             )
 
-        try:
-            result = await submit_to_gameserver(
-                candidate.flag,
-                host=get_submission_host(),
-                port=get_submission_port(),
-                timeout=get_submission_timeout(),
-            )
+        outcome = await submit_once(
+            candidate.flag,
+            submitter=submit_to_gameserver,
+        )
 
-        except SubmissionTimeoutError as exc:
-            state = RETRYABLE_STATE
-            code = "TIMEOUT"
-            message = str(exc)
-
-        except SubmissionConnectionError as exc:
-            state = RETRYABLE_STATE
-            code = "CONNECTION_ERROR"
-            message = str(exc)
-
-        except ValueError as exc:
-            state = RETRYABLE_STATE
-            code = "PROTOCOL_ERROR"
-            message = str(exc)
-
+        if outcome.terminal:
+            state = TERMINAL_STATE
         else:
-            code = result.code
-            message = result.message
-
-            if code in TERMINAL_SUBMISSION_CODES:
-                state = TERMINAL_STATE
-            else:
-                state = RETRYABLE_STATE
+            state = RETRYABLE_STATE
 
         recorded = record_claimed_submission(
             candidate.flag,
             worker_id,
             candidate.lease_token,
             state=state,
-            response_code=code,
-            response_message=message,
+            response_code=outcome.code,
+            response_message=outcome.message,
             service=candidate.service,
             source=candidate.source,
         )
@@ -130,8 +96,8 @@ async def retry_pending_once(
             RetryAttempt(
                 record_id=candidate.id,
                 state=state,
-                code=code,
-                message=message,
+                code=outcome.code,
+                message=outcome.message,
                 recorded=recorded,
             )
         )

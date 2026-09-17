@@ -12,14 +12,8 @@ from pydantic import (
 )
 
 from app.core.auth import require_api_token
-from app.core.config import (
-    get_submission_host,
-    get_submission_port,
-    get_submission_timeout,
-)
+from app.core.submission_service import submit_once
 from app.core.submitter import (
-    SubmissionConnectionError,
-    SubmissionTimeoutError,
     submit_flag as submit_to_gameserver,
 )
 from app.db.database import (
@@ -34,7 +28,7 @@ router = APIRouter(
     prefix="/api",
     tags=["flags"],
     dependencies=[
-        Depends(require_api_token),
+        Depends(require_api_token)
     ],
 )
 
@@ -44,20 +38,12 @@ FAUST_FLAG_PATTERN = re.compile(
 )
 
 
-TERMINAL_SUBMISSION_CODES = {
-    "OK",
-    "DUP",
-    "OWN",
-    "OLD",
-    "INV",
-}
-
-
 class FlagSubmission(BaseModel):
     flag: str = Field(
         min_length=1,
         max_length=512,
     )
+
     service: str | None = None
     source: str | None = None
 
@@ -74,7 +60,10 @@ class FlagSubmission(BaseModel):
                 "mof refuses to carry an empty flag"
             )
 
-        if FAUST_FLAG_PATTERN.fullmatch(value) is None:
+        if (
+            FAUST_FLAG_PATTERN.fullmatch(value)
+            is None
+        ):
             raise ValueError(
                 "mof does not recognize this as a FAUST flag"
             )
@@ -96,45 +85,12 @@ async def submit_flag(
             "remembered": True,
         }
 
-    try:
-        result = await submit_to_gameserver(
-            submission.flag,
-            host=get_submission_host(),
-            port=get_submission_port(),
-            timeout=get_submission_timeout(),
-        )
+    outcome = await submit_once(
+        submission.flag,
+        submitter=submit_to_gameserver,
+    )
 
-    except SubmissionTimeoutError as exc:
-        record_submission(
-            submission.flag,
-            state=RETRYABLE_STATE,
-            response_code="TIMEOUT",
-            response_message=str(exc),
-            service=submission.service,
-            source=submission.source,
-        )
-
-        raise HTTPException(
-            status_code=504,
-            detail=str(exc),
-        ) from exc
-
-    except SubmissionConnectionError as exc:
-        record_submission(
-            submission.flag,
-            state=RETRYABLE_STATE,
-            response_code="CONNECTION_ERROR",
-            response_message=str(exc),
-            service=submission.service,
-            source=submission.source,
-        )
-
-        raise HTTPException(
-            status_code=502,
-            detail=str(exc),
-        ) from exc
-
-    if result.code in TERMINAL_SUBMISSION_CODES:
+    if outcome.terminal:
         state = TERMINAL_STATE
     else:
         state = RETRYABLE_STATE
@@ -142,15 +98,27 @@ async def submit_flag(
     record_submission(
         submission.flag,
         state=state,
-        response_code=result.code,
-        response_message=result.message,
+        response_code=outcome.code,
+        response_message=outcome.message,
         service=submission.service,
         source=submission.source,
     )
 
+    if outcome.code == "TIMEOUT":
+        raise HTTPException(
+            status_code=504,
+            detail=outcome.message,
+        )
+
+    if outcome.code == "CONNECTION_ERROR":
+        raise HTTPException(
+            status_code=502,
+            detail=outcome.message,
+        )
+
     return {
         "status": "submitted",
-        "code": result.code,
-        "message": result.message,
-        "remembered": state == TERMINAL_STATE,
+        "code": outcome.code,
+        "message": outcome.message,
+        "remembered": outcome.terminal,
     }

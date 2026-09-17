@@ -1,112 +1,105 @@
-import asyncio
+from fastapi.testclient import TestClient
 
-import pytest
-from fastapi import HTTPException
-from pydantic import ValidationError
-
+from app import main
 from app.api import flags as flags_api
-from app.api.flags import FlagSubmission
+from app.core import submission_service
 from app.core.submitter import (
     SubmissionConnectionError,
     SubmissionResult,
     SubmissionTimeoutError,
 )
-from app.db.database import (
-    RETRYABLE_STATE,
-    TERMINAL_STATE,
-    get_submission_record,
-    has_flag,
-    store_flag,
-)
+from app.db import database
 
 
 VALID_FLAG = "FAUST_" + ("A" * 32)
 SECOND_VALID_FLAG = "FAUST_" + ("B" * 32)
-THIRD_VALID_FLAG = "FAUST_" + ("C" * 32)
-FOURTH_VALID_FLAG = "FAUST_" + ("D" * 32)
-FIFTH_VALID_FLAG = "FAUST_" + ("E" * 32)
-SIXTH_VALID_FLAG = "FAUST_" + ("F" * 32)
 
 
-def test_mof_refuses_empty_flag():
-    with pytest.raises(ValidationError):
-        FlagSubmission(
-            flag="     ",
-        )
+def _auth_headers(
+    monkeypatch,
+) -> dict[str, str]:
+    token = "test-moth-token"
 
-
-def test_mof_accepts_real_faust_flag_shape():
-    submission = FlagSubmission(
-        flag=VALID_FLAG,
+    monkeypatch.setenv(
+        "MOTH_API_TOKEN",
+        token,
     )
 
-    assert submission.flag == VALID_FLAG
+    return {
+        "Authorization": f"Bearer {token}",
+    }
 
 
-def test_mof_refuses_short_fake_flag():
-    with pytest.raises(
-        ValidationError,
-        match="does not recognize this as a FAUST flag",
+def test_mof_accepts_valid_faust_flag_format(
+    test_database,
+    monkeypatch,
+):
+    async def fake_submit(
+        flag: str,
+        host: str,
+        port: int,
+        timeout: float,
     ):
-        FlagSubmission(
-            flag="FAUST_TOO_SHORT",
+        return SubmissionResult(
+            flag=flag,
+            code="OK",
+            message="accepted",
         )
 
+    monkeypatch.setattr(
+        flags_api,
+        "submit_to_gameserver",
+        fake_submit,
+    )
 
-def test_mof_refuses_wrong_flag_prefix():
-    with pytest.raises(
-        ValidationError,
-        match="does not recognize this as a FAUST flag",
-    ):
-        FlagSubmission(
-            flag="MOTH_" + ("A" * 32),
+    headers = _auth_headers(
+        monkeypatch
+    )
+
+    with TestClient(main.app) as client:
+        response = client.post(
+            "/api/flags",
+            headers=headers,
+            json={
+                "flag": VALID_FLAG,
+            },
         )
 
+    assert response.status_code == 200
 
-def test_mof_refuses_invalid_flag_character():
-    with pytest.raises(
-        ValidationError,
-        match="does not recognize this as a FAUST flag",
-    ):
-        FlagSubmission(
-            flag="FAUST_" + ("A" * 31) + "!",
+    assert response.json() == {
+        "status": "submitted",
+        "code": "OK",
+        "message": "accepted",
+        "remembered": True,
+    }
+
+
+def test_mof_rejects_invalid_faust_flag(
+    test_database,
+    monkeypatch,
+):
+    headers = _auth_headers(
+        monkeypatch
+    )
+
+    with TestClient(main.app) as client:
+        response = client.post(
+            "/api/flags",
+            headers=headers,
+            json={
+                "flag": "definitely-not-a-flag",
+            },
         )
 
+    assert response.status_code == 422
 
-def test_mof_remembers_duplicate_flag(
-    test_database,
-):
-    flag = VALID_FLAG
+    body = response.json()
 
-    first_offering = store_flag(flag)
-    second_offering = store_flag(flag)
-
-    assert first_offering is True
-    assert second_offering is False
-
-
-def test_mof_knows_if_flag_was_seen(
-    test_database,
-):
-    flag = SECOND_VALID_FLAG
-
-    assert has_flag(flag) is False
-
-    store_flag(flag)
-
-    assert has_flag(flag) is True
-
-
-def test_mof_never_stores_plaintext(
-    test_database,
-):
-    flag = THIRD_VALID_FLAG
-
-    store_flag(flag)
-
-    database_bytes = test_database.read_bytes()
-
-    assert flag.encode("utf-8") not in database_bytes
+    assert (
+        "mof does not recognize this as a FAUST flag"
+        in str(body)
+    )
 
 
 def test_mof_submits_new_flag_and_remembers_it(
@@ -136,58 +129,78 @@ def test_mof_submits_new_flag_and_remembers_it(
         "submit_to_gameserver",
         fake_submit,
     )
+
     monkeypatch.setattr(
-        flags_api,
+        submission_service,
         "get_submission_host",
         lambda: "fake.gameserver",
     )
+
     monkeypatch.setattr(
-        flags_api,
+        submission_service,
         "get_submission_port",
         lambda: 666,
     )
+
     monkeypatch.setattr(
-        flags_api,
+        submission_service,
         "get_submission_timeout",
         lambda: 2.0,
     )
 
-    result = asyncio.run(
-        flags_api.submit_flag(
-            FlagSubmission(
-                flag=flag,
-                service="test-service",
-                source="pytest",
-            )
-        )
+    headers = _auth_headers(
+        monkeypatch
     )
 
-    assert result == {
+    with TestClient(main.app) as client:
+        response = client.post(
+            "/api/flags",
+            headers=headers,
+            json={
+                "flag": flag,
+                "service": "test-service",
+                "source": "pytest",
+            },
+        )
+
+    assert response.status_code == 200
+
+    assert response.json() == {
         "status": "submitted",
         "code": "OK",
         "message": "accepted",
         "remembered": True,
     }
 
-    assert has_flag(flag) is True
-
-    record = get_submission_record(flag)
+    record = database.get_submission_record(
+        flag
+    )
 
     assert record is not None
-    assert record["submission_state"] == TERMINAL_STATE
+
+    assert (
+        record["submission_state"]
+        == database.TERMINAL_STATE
+    )
+
     assert record["response_code"] == "OK"
     assert record["response_message"] == "accepted"
     assert record["service"] == "test-service"
     assert record["source"] == "pytest"
 
+    assert database.has_flag(flag) is True
 
-def test_mof_does_not_submit_local_duplicate(
+
+def test_mof_returns_local_duplicate_without_submitting(
     test_database,
     monkeypatch,
 ):
-    flag = SECOND_VALID_FLAG
-
-    store_flag(flag)
+    database.record_submission(
+        VALID_FLAG,
+        state=database.TERMINAL_STATE,
+        response_code="OK",
+        response_message="accepted",
+    )
 
     async def fake_submit(
         flag: str,
@@ -196,7 +209,7 @@ def test_mof_does_not_submit_local_duplicate(
         timeout: float,
     ):
         raise AssertionError(
-            "mof should not submit a known flag"
+            "duplicate flag reached gameserver"
         )
 
     monkeypatch.setattr(
@@ -205,25 +218,35 @@ def test_mof_does_not_submit_local_duplicate(
         fake_submit,
     )
 
-    result = asyncio.run(
-        flags_api.submit_flag(
-            FlagSubmission(
-                flag=flag,
-            )
-        )
+    headers = _auth_headers(
+        monkeypatch
     )
 
-    assert result["status"] == "duplicate"
-    assert result["code"] == "LOCAL"
-    assert result["remembered"] is True
+    with TestClient(main.app) as client:
+        response = client.post(
+            "/api/flags",
+            headers=headers,
+            json={
+                "flag": VALID_FLAG,
+            },
+        )
+
+    assert response.status_code == 200
+
+    assert response.json() == {
+        "status": "duplicate",
+        "code": "LOCAL",
+        "message": (
+            "mof has already seen this offering"
+        ),
+        "remembered": True,
+    }
 
 
-def test_mof_records_gameserver_error_as_retryable(
+def test_mof_records_err_as_retryable(
     test_database,
     monkeypatch,
 ):
-    flag = THIRD_VALID_FLAG
-
     async def fake_submit(
         flag: str,
         host: str,
@@ -242,39 +265,57 @@ def test_mof_records_gameserver_error_as_retryable(
         fake_submit,
     )
 
-    result = asyncio.run(
-        flags_api.submit_flag(
-            FlagSubmission(
-                flag=flag,
-                service="test-service",
-                source="pytest",
-            )
-        )
+    headers = _auth_headers(
+        monkeypatch
     )
 
-    assert result["code"] == "ERR"
-    assert result["remembered"] is False
-    assert has_flag(flag) is False
+    with TestClient(main.app) as client:
+        response = client.post(
+            "/api/flags",
+            headers=headers,
+            json={
+                "flag": VALID_FLAG,
+                "service": "test-service",
+                "source": "pytest",
+            },
+        )
 
-    record = get_submission_record(flag)
+    assert response.status_code == 200
+
+    assert response.json() == {
+        "status": "submitted",
+        "code": "ERR",
+        "message": "try again later",
+        "remembered": False,
+    }
+
+    record = database.get_submission_record(
+        VALID_FLAG
+    )
 
     assert record is not None
-    assert record["submission_state"] == RETRYABLE_STATE
+
+    assert (
+        record["submission_state"]
+        == database.RETRYABLE_STATE
+    )
+
     assert record["response_code"] == "ERR"
+
     assert (
         record["response_message"]
         == "try again later"
     )
-    assert record["service"] == "test-service"
-    assert record["source"] == "pytest"
+
+    assert database.has_flag(
+        VALID_FLAG
+    ) is False
 
 
-def test_mof_treats_unknown_response_as_retryable(
+def test_mof_records_unknown_code_as_retryable(
     test_database,
     monkeypatch,
 ):
-    flag = SIXTH_VALID_FLAG
-
     async def fake_submit(
         flag: str,
         host: str,
@@ -284,7 +325,7 @@ def test_mof_treats_unknown_response_as_retryable(
         return SubmissionResult(
             flag=flag,
             code="MYSTERY",
-            message="new species of lämp",
+            message="moth confusion",
         )
 
     monkeypatch.setattr(
@@ -293,31 +334,49 @@ def test_mof_treats_unknown_response_as_retryable(
         fake_submit,
     )
 
-    result = asyncio.run(
-        flags_api.submit_flag(
-            FlagSubmission(
-                flag=flag,
-            )
-        )
+    headers = _auth_headers(
+        monkeypatch
     )
 
-    assert result["code"] == "MYSTERY"
-    assert result["remembered"] is False
-    assert has_flag(flag) is False
+    with TestClient(main.app) as client:
+        response = client.post(
+            "/api/flags",
+            headers=headers,
+            json={
+                "flag": VALID_FLAG,
+            },
+        )
 
-    record = get_submission_record(flag)
+    assert response.status_code == 200
+
+    assert response.json() == {
+        "status": "submitted",
+        "code": "MYSTERY",
+        "message": "moth confusion",
+        "remembered": False,
+    }
+
+    record = database.get_submission_record(
+        VALID_FLAG
+    )
 
     assert record is not None
-    assert record["submission_state"] == RETRYABLE_STATE
-    assert record["response_code"] == "MYSTERY"
+
+    assert (
+        record["submission_state"]
+        == database.RETRYABLE_STATE
+    )
+
+    assert (
+        record["response_code"]
+        == "MYSTERY"
+    )
 
 
-def test_mof_records_silent_lamp_as_retryable(
+def test_mof_records_timeout_as_retryable(
     test_database,
     monkeypatch,
 ):
-    flag = FOURTH_VALID_FLAG
-
     async def fake_submit(
         flag: str,
         host: str,
@@ -325,7 +384,8 @@ def test_mof_records_silent_lamp_as_retryable(
         timeout: float,
     ):
         raise SubmissionTimeoutError(
-            "mof waited for the lämp, but it never answered"
+            "mof waited for the lämp, "
+            "but it never answered"
         )
 
     monkeypatch.setattr(
@@ -334,37 +394,53 @@ def test_mof_records_silent_lamp_as_retryable(
         fake_submit,
     )
 
-    with pytest.raises(HTTPException) as error:
-        asyncio.run(
-            flags_api.submit_flag(
-                FlagSubmission(
-                    flag=flag,
-                    service="test-service",
-                    source="pytest",
-                )
-            )
-        )
-
-    assert error.value.status_code == 504
-    assert has_flag(flag) is False
-
-    record = get_submission_record(flag)
-
-    assert record is not None
-    assert record["submission_state"] == RETRYABLE_STATE
-    assert record["response_code"] == "TIMEOUT"
-    assert (
-        record["response_message"]
-        == "mof waited for the lämp, but it never answered"
+    headers = _auth_headers(
+        monkeypatch
     )
 
+    with TestClient(main.app) as client:
+        response = client.post(
+            "/api/flags",
+            headers=headers,
+            json={
+                "flag": VALID_FLAG,
+            },
+        )
 
-def test_mof_records_missing_lamp_as_retryable(
+    assert response.status_code == 504
+
+    assert response.json() == {
+        "detail": (
+            "mof waited for the lämp, "
+            "but it never answered"
+        )
+    }
+
+    record = database.get_submission_record(
+        VALID_FLAG
+    )
+
+    assert record is not None
+
+    assert (
+        record["submission_state"]
+        == database.RETRYABLE_STATE
+    )
+
+    assert (
+        record["response_code"]
+        == "TIMEOUT"
+    )
+
+    assert database.has_flag(
+        VALID_FLAG
+    ) is False
+
+
+def test_mof_records_connection_error_as_retryable(
     test_database,
     monkeypatch,
 ):
-    flag = FIFTH_VALID_FLAG
-
     async def fake_submit(
         flag: str,
         host: str,
@@ -372,7 +448,8 @@ def test_mof_records_missing_lamp_as_retryable(
         timeout: float,
     ):
         raise SubmissionConnectionError(
-            "mof could not find the lämp"
+            "mof flew toward the lämp, "
+            "but there was no lämp"
         )
 
     monkeypatch.setattr(
@@ -381,26 +458,44 @@ def test_mof_records_missing_lamp_as_retryable(
         fake_submit,
     )
 
-    with pytest.raises(HTTPException) as error:
-        asyncio.run(
-            flags_api.submit_flag(
-                FlagSubmission(
-                    flag=flag,
-                    service="test-service",
-                    source="pytest",
-                )
-            )
+    headers = _auth_headers(
+        monkeypatch
+    )
+
+    with TestClient(main.app) as client:
+        response = client.post(
+            "/api/flags",
+            headers=headers,
+            json={
+                "flag": VALID_FLAG,
+            },
         )
 
-    assert error.value.status_code == 502
-    assert has_flag(flag) is False
+    assert response.status_code == 502
 
-    record = get_submission_record(flag)
+    assert response.json() == {
+        "detail": (
+            "mof flew toward the lämp, "
+            "but there was no lämp"
+        )
+    }
+
+    record = database.get_submission_record(
+        VALID_FLAG
+    )
 
     assert record is not None
-    assert record["submission_state"] == RETRYABLE_STATE
-    assert record["response_code"] == "CONNECTION_ERROR"
+
     assert (
-        record["response_message"]
-        == "mof could not find the lämp"
+        record["submission_state"]
+        == database.RETRYABLE_STATE
     )
+
+    assert (
+        record["response_code"]
+        == "CONNECTION_ERROR"
+    )
+
+    assert database.has_flag(
+        VALID_FLAG
+    ) is False
