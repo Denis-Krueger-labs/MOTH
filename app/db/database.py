@@ -1,9 +1,14 @@
 import os
 import sqlite3
+from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 
-from app.core.crypto import encrypt_flag, fingerprint_flag
+from app.core.crypto import (
+    decrypt_flag,
+    encrypt_flag,
+    fingerprint_flag,
+)
 
 
 DATABASE_PATH = Path(
@@ -17,6 +22,18 @@ VALID_SUBMISSION_STATES = {
     TERMINAL_STATE,
     RETRYABLE_STATE,
 }
+
+
+@dataclass
+class RetryCandidate:
+    id: int
+    flag: str
+    response_code: str | None
+    response_message: str | None
+    service: str | None
+    source: str | None
+    created_at: str | None
+    updated_at: str | None
 
 
 def _utc_now() -> str:
@@ -255,6 +272,68 @@ def get_submission_record(
         return None
 
     return dict(row)
+
+
+def get_retryable_submissions(
+    limit: int = 100,
+) -> list[RetryCandidate]:
+    if limit <= 0:
+        raise ValueError(
+            "mof needs a positive retry queue limit"
+        )
+
+    with sqlite3.connect(
+        DATABASE_PATH
+    ) as connection:
+        connection.row_factory = sqlite3.Row
+
+        rows = connection.execute(
+            """
+            SELECT
+                id,
+                flag_ciphertext,
+                flag_nonce,
+                response_code,
+                response_message,
+                service,
+                source,
+                created_at,
+                updated_at
+            FROM flags
+            WHERE submission_state = ?
+            ORDER BY
+                updated_at ASC,
+                id ASC
+            LIMIT ?
+            """,
+            (
+                RETRYABLE_STATE,
+                limit,
+            ),
+        ).fetchall()
+
+    candidates = []
+
+    for row in rows:
+        flag = decrypt_flag(
+            row["flag_nonce"],
+            row["flag_ciphertext"],
+        )
+
+        candidates.append(
+            RetryCandidate(
+                id=row["id"],
+                flag=flag,
+                response_code=row["response_code"],
+                response_message=row["response_message"],
+                service=row["service"],
+                source=row["source"],
+                created_at=row["created_at"],
+                updated_at=row["updated_at"],
+            )
+        )
+
+    return candidates
 
 
 def store_flag(flag: str) -> bool:
