@@ -161,14 +161,28 @@ def test_batch_records_invalid_and_batch_duplicate(
 
     assert len(recent) == 3
 
-    assert recent[0].event_type == "invalid"
-    assert recent[0].code == "INVALID_FORMAT"
+    observed = {
+        (
+            event.event_type,
+            event.code,
+        )
+        for event in recent
+    }
 
-    assert recent[1].event_type == "duplicate"
-    assert recent[1].code == "BATCH"
-
-    assert recent[2].event_type == "submission"
-    assert recent[2].code == "OK"
+    assert observed == {
+        (
+            "submission",
+            "OK",
+        ),
+        (
+            "duplicate",
+            "BATCH",
+        ),
+        (
+            "invalid",
+            "INVALID_FORMAT",
+        ),
+    }
 
 
 def test_mori_auth_swat_records_event(

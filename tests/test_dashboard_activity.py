@@ -228,6 +228,7 @@ def test_recent_activity_endpoint_is_safe(
     assert event["code"] == "OK"
     assert event["service"] == "achat"
     assert event["source"] == "pytest"
+    assert event["event_count"] == 1
 
     assert set(event) == {
         "id",
@@ -237,6 +238,7 @@ def test_recent_activity_endpoint_is_safe(
         "service",
         "source",
         "worker_id",
+        "event_count",
         "created_at",
     }
 

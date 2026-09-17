@@ -6,7 +6,7 @@ from fastapi import (
 )
 
 from app.db.events import (
-    record_event_safely,
+    record_batched_event_safely,
 )
 
 
@@ -20,7 +20,7 @@ async def require_api_token(
     )
 
     if authorization is None:
-        record_event_safely(
+        record_batched_event_safely(
             "auth_rejected",
             code="MISSING",
             state="rejected",
@@ -47,7 +47,7 @@ async def require_api_token(
         or not separator
         or not token
     ):
-        record_event_safely(
+        record_batched_event_safely(
             "auth_rejected",
             code="MALFORMED",
             state="rejected",
@@ -69,7 +69,7 @@ async def require_api_token(
         expected_token = get_api_token()
 
     except RuntimeError as exc:
-        record_event_safely(
+        record_batched_event_safely(
             "auth_rejected",
             code="SERVER_TOKEN_MISSING",
             state="error",
@@ -88,7 +88,7 @@ async def require_api_token(
         token,
         expected_token,
     ):
-        record_event_safely(
+        record_batched_event_safely(
             "auth_rejected",
             code="UNKNOWN",
             state="rejected",

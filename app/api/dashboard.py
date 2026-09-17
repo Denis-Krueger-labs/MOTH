@@ -6,10 +6,13 @@ from fastapi import (
     Query,
     Request,
 )
+from starlette.concurrency import (
+    run_in_threadpool,
+)
 
 from app.core.auth import require_api_token
 from app.core.operational_health import (
-    get_operational_health,
+    build_operational_health,
     probe_submission_server,
 )
 from app.db.dashboard import (
@@ -30,12 +33,12 @@ router = APIRouter(
 
 
 @router.get("/stats")
-async def dashboard_stats():
+def dashboard_stats():
     return get_dashboard_stats()
 
 
 @router.get("/recent")
-async def dashboard_recent(
+def dashboard_recent(
     limit: int = Query(
         default=50,
         ge=1,
@@ -59,8 +62,13 @@ async def dashboard_recent(
 async def dashboard_health(
     request: Request,
 ):
-    return get_operational_health(
-        request.app
+    stats = await run_in_threadpool(
+        get_dashboard_stats
+    )
+
+    return build_operational_health(
+        request.app,
+        stats,
     )
 
 

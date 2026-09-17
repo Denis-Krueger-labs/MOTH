@@ -15,12 +15,15 @@ from app.api.health import (
 from app.core import scheduler
 from app.db import database
 from app.db import events
+from app.db import submission_gate
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     database.initialize_database()
     events.initialize_event_history()
+
+    submission_gate.initialize_submission_gate()
 
     stop_event = asyncio.Event()
 
@@ -46,6 +49,8 @@ async def lifespan(app: FastAPI):
         stop_event.set()
 
         await scheduler_task
+
+        events.flush_batched_events()
 
 
 app = FastAPI(
@@ -75,5 +80,7 @@ async def root():
     return {
         "name": "MOTH",
         "status": "alive",
-        "message": "mof is watching the lämp",
+        "message": (
+            "mof is watching the lämp"
+        ),
     }

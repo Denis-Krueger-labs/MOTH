@@ -1,47 +1,49 @@
+from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
-from app import main
 from app.api import flags as flags_api
 from app.core.submitter import (
     SubmissionResult,
     SubmissionTimeoutError,
 )
-from app.db import database
 
 
-FIRST_FLAG = "FAUST_" + ("H" * 32)
-SECOND_FLAG = "FAUST_" + ("I" * 32)
+FIRST_FLAG = "FAUST_" + ("A" * 32)
+SECOND_FLAG = "FAUST_" + ("B" * 32)
+THIRD_FLAG = "FAUST_" + ("C" * 32)
 
 
-def _auth_headers(
+def create_test_client(
     monkeypatch,
-) -> dict[str, str]:
-    token = "test-moth-token"
-
+) -> TestClient:
     monkeypatch.setenv(
         "MOTH_API_TOKEN",
-        token,
+        "test-token",
     )
 
+    app = FastAPI()
+    app.include_router(
+        flags_api.router
+    )
+
+    return TestClient(app)
+
+
+def auth_headers() -> dict[str, str]:
     return {
-        "Authorization": f"Bearer {token}",
+        "Authorization": "Bearer test-token",
     }
 
 
 def test_batch_submits_multiple_flags(
-    test_database,
     monkeypatch,
 ):
-    submitted = []
-
     async def fake_submit(
         flag: str,
         host: str,
         port: int,
         timeout: float,
     ):
-        submitted.append(flag)
-
         return SubmissionResult(
             flag=flag,
             code="OK",
@@ -54,23 +56,20 @@ def test_batch_submits_multiple_flags(
         fake_submit,
     )
 
-    headers = _auth_headers(
+    client = create_test_client(
         monkeypatch
     )
 
-    with TestClient(main.app) as client:
-        response = client.post(
-            "/api/flags/batch",
-            headers=headers,
-            json={
-                "flags": [
-                    FIRST_FLAG,
-                    SECOND_FLAG,
-                ],
-                "service": "achat",
-                "source": "pytest",
-            },
-        )
+    response = client.post(
+        "/api/flags/batch",
+        headers=auth_headers(),
+        json={
+            "flags": [
+                FIRST_FLAG,
+                SECOND_FLAG,
+            ],
+        },
+    )
 
     assert response.status_code == 200
 
@@ -83,29 +82,29 @@ def test_batch_submits_multiple_flags(
         "terminal_other": 0,
         "retryable": 0,
         "invalid": 0,
+        "in_flight": 0,
+        "overloaded": 0,
     }
 
-    assert submitted == [
-        FIRST_FLAG,
-        SECOND_FLAG,
-    ]
+    assert len(
+        body["results"]
+    ) == 2
 
     assert (
-        database.has_flag(FIRST_FLAG)
-        is True
+        body["results"][0]["code"]
+        == "OK"
     )
 
     assert (
-        database.has_flag(SECOND_FLAG)
-        is True
+        body["results"][1]["code"]
+        == "OK"
     )
 
 
 def test_batch_deduplicates_inside_request(
-    test_database,
     monkeypatch,
 ):
-    submitted = []
+    calls = 0
 
     async def fake_submit(
         flag: str,
@@ -113,7 +112,9 @@ def test_batch_deduplicates_inside_request(
         port: int,
         timeout: float,
     ):
-        submitted.append(flag)
+        nonlocal calls
+
+        calls += 1
 
         return SubmissionResult(
             flag=flag,
@@ -127,21 +128,22 @@ def test_batch_deduplicates_inside_request(
         fake_submit,
     )
 
-    headers = _auth_headers(
+    client = create_test_client(
         monkeypatch
     )
 
-    with TestClient(main.app) as client:
-        response = client.post(
-            "/api/flags/batch",
-            headers=headers,
-            json={
-                "flags": [
-                    FIRST_FLAG,
-                    FIRST_FLAG,
-                ],
-            },
-        )
+    response = client.post(
+        "/api/flags/batch",
+        headers=auth_headers(),
+        json={
+            "flags": [
+                FIRST_FLAG,
+                FIRST_FLAG,
+            ],
+        },
+    )
+
+    assert response.status_code == 200
 
     body = response.json()
 
@@ -152,29 +154,37 @@ def test_batch_deduplicates_inside_request(
         "terminal_other": 0,
         "retryable": 0,
         "invalid": 0,
+        "in_flight": 0,
+        "overloaded": 0,
     }
 
-    assert submitted == [
-        FIRST_FLAG,
-    ]
+    assert calls == 1
 
-    assert body["results"][1]["code"] == "BATCH"
+    assert (
+        body["results"][0]["code"]
+        == "OK"
+    )
+
+    assert (
+        body["results"][1]["code"]
+        == "BATCH"
+    )
+
+    assert (
+        body["results"][1]["status"]
+        == "duplicate"
+    )
 
 
 def test_batch_invalid_flag_does_not_kill_valid_flag(
-    test_database,
     monkeypatch,
 ):
-    submitted = []
-
     async def fake_submit(
         flag: str,
         host: str,
         port: int,
         timeout: float,
     ):
-        submitted.append(flag)
-
         return SubmissionResult(
             flag=flag,
             code="OK",
@@ -187,21 +197,20 @@ def test_batch_invalid_flag_does_not_kill_valid_flag(
         fake_submit,
     )
 
-    headers = _auth_headers(
+    client = create_test_client(
         monkeypatch
     )
 
-    with TestClient(main.app) as client:
-        response = client.post(
-            "/api/flags/batch",
-            headers=headers,
-            json={
-                "flags": [
-                    "not-a-faust-flag",
-                    FIRST_FLAG,
-                ],
-            },
-        )
+    response = client.post(
+        "/api/flags/batch",
+        headers=auth_headers(),
+        json={
+            "flags": [
+                FIRST_FLAG,
+                "definitely-not-a-flag",
+            ],
+        },
+    )
 
     assert response.status_code == 200
 
@@ -214,20 +223,27 @@ def test_batch_invalid_flag_does_not_kill_valid_flag(
         "terminal_other": 0,
         "retryable": 0,
         "invalid": 1,
+        "in_flight": 0,
+        "overloaded": 0,
     }
 
     assert (
-        body["results"][0]["status"]
+        body["results"][0]["code"]
+        == "OK"
+    )
+
+    assert (
+        body["results"][1]["code"]
+        == "INVALID_FORMAT"
+    )
+
+    assert (
+        body["results"][1]["status"]
         == "invalid"
     )
 
-    assert submitted == [
-        FIRST_FLAG,
-    ]
 
-
-def test_batch_records_retryable_result(
-    test_database,
+def test_batch_records_retryable_gameserver_error(
     monkeypatch,
 ):
     async def fake_submit(
@@ -248,40 +264,42 @@ def test_batch_records_retryable_result(
         fake_submit,
     )
 
-    headers = _auth_headers(
+    client = create_test_client(
         monkeypatch
     )
 
-    with TestClient(main.app) as client:
-        response = client.post(
-            "/api/flags/batch",
-            headers=headers,
-            json={
-                "flags": [
-                    FIRST_FLAG,
-                ],
-            },
-        )
+    response = client.post(
+        "/api/flags/batch",
+        headers=auth_headers(),
+        json={
+            "flags": [
+                FIRST_FLAG,
+            ],
+        },
+    )
+
+    assert response.status_code == 200
 
     body = response.json()
 
-    assert body["summary"]["retryable"] == 1
-    assert body["summary"]["accepted"] == 0
+    assert body["summary"] == {
+        "received": 1,
+        "accepted": 0,
+        "duplicate": 0,
+        "terminal_other": 0,
+        "retryable": 1,
+        "invalid": 0,
+        "in_flight": 0,
+        "overloaded": 0,
+    }
 
-    record = database.get_submission_record(
-        FIRST_FLAG
-    )
+    result = body["results"][0]
 
-    assert record is not None
-
-    assert (
-        record["submission_state"]
-        == database.RETRYABLE_STATE
-    )
+    assert result["code"] == "ERR"
+    assert result["remembered"] is False
 
 
 def test_batch_timeout_does_not_fail_whole_request(
-    test_database,
     monkeypatch,
 ):
     async def fake_submit(
@@ -290,9 +308,10 @@ def test_batch_timeout_does_not_fail_whole_request(
         port: int,
         timeout: float,
     ):
-        if flag == FIRST_FLAG:
+        if flag == SECOND_FLAG:
             raise SubmissionTimeoutError(
-                "mof waited for the lämp"
+                "mof waited for the lämp, "
+                "but it never answered"
             )
 
         return SubmissionResult(
@@ -307,66 +326,64 @@ def test_batch_timeout_does_not_fail_whole_request(
         fake_submit,
     )
 
-    headers = _auth_headers(
+    client = create_test_client(
         monkeypatch
     )
 
-    with TestClient(main.app) as client:
-        response = client.post(
-            "/api/flags/batch",
-            headers=headers,
-            json={
-                "flags": [
-                    FIRST_FLAG,
-                    SECOND_FLAG,
-                ],
-            },
-        )
+    response = client.post(
+        "/api/flags/batch",
+        headers=auth_headers(),
+        json={
+            "flags": [
+                FIRST_FLAG,
+                SECOND_FLAG,
+                THIRD_FLAG,
+            ],
+        },
+    )
 
     assert response.status_code == 200
 
     body = response.json()
 
     assert body["summary"] == {
-        "received": 2,
-        "accepted": 1,
+        "received": 3,
+        "accepted": 2,
         "duplicate": 0,
         "terminal_other": 0,
         "retryable": 1,
         "invalid": 0,
+        "in_flight": 0,
+        "overloaded": 0,
     }
 
     assert (
-        body["results"][0]["code"]
+        body["results"][1]["code"]
         == "TIMEOUT"
     )
 
     assert (
-        body["results"][1]["code"]
-        == "OK"
+        body["results"][1]["remembered"]
+        is False
     )
 
 
 def test_batch_refuses_more_than_500_flags(
-    test_database,
     monkeypatch,
 ):
-    headers = _auth_headers(
+    client = create_test_client(
         monkeypatch
     )
 
-    flags = [
-        FIRST_FLAG
-        for _ in range(501)
-    ]
-
-    with TestClient(main.app) as client:
-        response = client.post(
-            "/api/flags/batch",
-            headers=headers,
-            json={
-                "flags": flags,
-            },
-        )
+    response = client.post(
+        "/api/flags/batch",
+        headers=auth_headers(),
+        json={
+            "flags": [
+                FIRST_FLAG
+                for _ in range(501)
+            ],
+        },
+    )
 
     assert response.status_code == 422

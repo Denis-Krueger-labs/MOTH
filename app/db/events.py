@@ -1,5 +1,7 @@
 import logging
 import sqlite3
+import threading
+from collections import Counter
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 
@@ -9,6 +11,22 @@ from app.db import database
 logger = logging.getLogger(__name__)
 
 MAX_RECENT_EVENTS = 500
+DEFAULT_BATCH_SIZE = 100
+
+_BATCH_LOCK = threading.Lock()
+
+_BATCHED_EVENTS: dict[
+    tuple[
+        str,
+        str,
+        str | None,
+        str | None,
+        str | None,
+        str | None,
+        str | None,
+    ],
+    int,
+] = {}
 
 
 @dataclass(frozen=True, slots=True)
@@ -20,6 +38,7 @@ class SubmissionEvent:
     service: str | None
     source: str | None
     worker_id: str | None
+    event_count: int
     created_at: str
 
 
@@ -27,6 +46,12 @@ def _utc_now() -> str:
     return datetime.now(
         timezone.utc
     ).isoformat()
+
+
+def _database_key() -> str:
+    return str(
+        database.DATABASE_PATH
+    )
 
 
 def _empty_event_metrics() -> dict[str, int]:
@@ -58,10 +83,29 @@ def initialize_event_history() -> None:
                 service TEXT,
                 source TEXT,
                 worker_id TEXT,
+                event_count INTEGER NOT NULL DEFAULT 1,
                 created_at TEXT NOT NULL
             )
             """
         )
+
+        columns = {
+            row[1]
+            for row in connection.execute(
+                """
+                PRAGMA table_info(submission_events)
+                """
+            ).fetchall()
+        }
+
+        if "event_count" not in columns:
+            connection.execute(
+                """
+                ALTER TABLE submission_events
+                ADD COLUMN event_count
+                INTEGER NOT NULL DEFAULT 1
+                """
+            )
 
         connection.execute(
             """
@@ -88,12 +132,18 @@ def record_event(
     service: str | None = None,
     source: str | None = None,
     worker_id: str | None = None,
+    event_count: int = 1,
 ) -> int:
     event_type = event_type.strip()
 
     if not event_type:
         raise ValueError(
             "mof refuses to remember an unnamed event"
+        )
+
+    if event_count <= 0:
+        raise ValueError(
+            "mof refuses to remember a non-positive event count"
         )
 
     created_at = _utc_now()
@@ -110,9 +160,10 @@ def record_event(
                 service,
                 source,
                 worker_id,
+                event_count,
                 created_at
             )
-            VALUES (?, ?, ?, ?, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 event_type,
@@ -121,6 +172,7 @@ def record_event(
                 service,
                 source,
                 worker_id,
+                event_count,
                 created_at,
             ),
         )
@@ -143,6 +195,7 @@ def record_event_safely(
     service: str | None = None,
     source: str | None = None,
     worker_id: str | None = None,
+    event_count: int = 1,
 ) -> int | None:
     try:
         return record_event(
@@ -152,6 +205,7 @@ def record_event_safely(
             service=service,
             source=source,
             worker_id=worker_id,
+            event_count=event_count,
         )
 
     except sqlite3.Error:
@@ -160,6 +214,190 @@ def record_event_safely(
         )
 
         return None
+
+
+def record_batched_event_safely(
+    event_type: str,
+    *,
+    code: str | None = None,
+    state: str | None = None,
+    service: str | None = None,
+    source: str | None = None,
+    worker_id: str | None = None,
+    batch_size: int = DEFAULT_BATCH_SIZE,
+) -> int | None:
+    if batch_size <= 0:
+        raise ValueError(
+            "mof needs a positive event batch size"
+        )
+
+    key = (
+        _database_key(),
+        event_type,
+        code,
+        state,
+        service,
+        source,
+        worker_id,
+    )
+
+    flush_count = 0
+
+    with _BATCH_LOCK:
+        current = (
+            _BATCHED_EVENTS.get(
+                key,
+                0,
+            )
+            + 1
+        )
+
+        if current >= batch_size:
+            flush_count = (
+                current // batch_size
+            ) * batch_size
+
+            remainder = (
+                current - flush_count
+            )
+
+            if remainder:
+                _BATCHED_EVENTS[
+                    key
+                ] = remainder
+            else:
+                _BATCHED_EVENTS.pop(
+                    key,
+                    None,
+                )
+
+        else:
+            _BATCHED_EVENTS[
+                key
+            ] = current
+
+    if flush_count == 0:
+        return None
+
+    event_id = record_event_safely(
+        event_type,
+        code=code,
+        state=state,
+        service=service,
+        source=source,
+        worker_id=worker_id,
+        event_count=flush_count,
+    )
+
+    if event_id is None:
+        with _BATCH_LOCK:
+            _BATCHED_EVENTS[key] = (
+                _BATCHED_EVENTS.get(
+                    key,
+                    0,
+                )
+                + flush_count
+            )
+
+    return event_id
+
+
+def flush_batched_events() -> int:
+    database_key = _database_key()
+
+    pending: list[
+        tuple[
+            tuple[
+                str,
+                str,
+                str | None,
+                str | None,
+                str | None,
+                str | None,
+                str | None,
+            ],
+            int,
+        ]
+    ] = []
+
+    with _BATCH_LOCK:
+        for key, count in list(
+            _BATCHED_EVENTS.items()
+        ):
+            if key[0] != database_key:
+                continue
+
+            pending.append(
+                (
+                    key,
+                    count,
+                )
+            )
+
+            _BATCHED_EVENTS.pop(
+                key,
+                None,
+            )
+
+    flushed = 0
+
+    for key, count in pending:
+        (
+            _,
+            event_type,
+            code,
+            state,
+            service,
+            source,
+            worker_id,
+        ) = key
+
+        event_id = record_event_safely(
+            event_type,
+            code=code,
+            state=state,
+            service=service,
+            source=source,
+            worker_id=worker_id,
+            event_count=count,
+        )
+
+        if event_id is None:
+            with _BATCH_LOCK:
+                _BATCHED_EVENTS[key] = (
+                    _BATCHED_EVENTS.get(
+                        key,
+                        0,
+                    )
+                    + count
+                )
+
+            continue
+
+        flushed += count
+
+    return flushed
+
+
+def _pending_counts_by_type() -> Counter[str]:
+    database_key = _database_key()
+
+    counts: Counter[str] = Counter()
+
+    with _BATCH_LOCK:
+        for key, count in (
+            _BATCHED_EVENTS.items()
+        ):
+            if key[0] != database_key:
+                continue
+
+            event_type = key[1]
+
+            counts[
+                event_type
+            ] += count
+
+    return counts
 
 
 def get_recent_events(
@@ -190,6 +428,7 @@ def get_recent_events(
                 service,
                 source,
                 worker_id,
+                event_count,
                 created_at
             FROM submission_events
             ORDER BY
@@ -209,6 +448,7 @@ def get_recent_events(
             service=row["service"],
             source=row["source"],
             worker_id=row["worker_id"],
+            event_count=row["event_count"],
             created_at=row["created_at"],
         )
         for row in rows
@@ -240,128 +480,202 @@ def get_event_metrics() -> dict[str, int]:
         ).fetchone()
 
         if table_exists is None:
-            return _empty_event_metrics()
+            metrics = (
+                _empty_event_metrics()
+            )
 
-        row = connection.execute(
-            """
-            SELECT
-                COUNT(*) AS event_count,
+        else:
+            row = connection.execute(
+                """
+                SELECT
+                    SUM(event_count)
+                        AS event_count,
 
-                SUM(
-                    CASE
-                        WHEN event_type IN (
-                            'submission',
-                            'retry'
-                        )
-                        THEN 1
-                        ELSE 0
-                    END
-                ) AS gameserver_attempts,
+                    SUM(
+                        CASE
+                            WHEN event_type IN (
+                                'submission',
+                                'retry'
+                            )
+                            THEN event_count
+                            ELSE 0
+                        END
+                    ) AS gameserver_attempts,
 
-                SUM(
-                    CASE
-                        WHEN event_type = 'submission'
-                        THEN 1
-                        ELSE 0
-                    END
-                ) AS initial_submissions,
+                    SUM(
+                        CASE
+                            WHEN event_type = 'submission'
+                            THEN event_count
+                            ELSE 0
+                        END
+                    ) AS initial_submissions,
 
-                SUM(
-                    CASE
-                        WHEN event_type = 'retry'
-                        THEN 1
-                        ELSE 0
-                    END
-                ) AS retry_attempts,
+                    SUM(
+                        CASE
+                            WHEN event_type = 'retry'
+                            THEN event_count
+                            ELSE 0
+                        END
+                    ) AS retry_attempts,
 
-                SUM(
-                    CASE
-                        WHEN event_type = 'duplicate'
-                        THEN 1
-                        ELSE 0
-                    END
-                ) AS local_duplicates,
+                    SUM(
+                        CASE
+                            WHEN event_type = 'duplicate'
+                            THEN event_count
+                            ELSE 0
+                        END
+                    ) AS local_duplicates,
 
-                SUM(
-                    CASE
-                        WHEN event_type = 'invalid'
-                        THEN 1
-                        ELSE 0
-                    END
-                ) AS invalid_events,
+                    SUM(
+                        CASE
+                            WHEN event_type = 'invalid'
+                            THEN event_count
+                            ELSE 0
+                        END
+                    ) AS invalid_events,
 
-                SUM(
-                    CASE
-                        WHEN event_type = 'auth_rejected'
-                        THEN 1
-                        ELSE 0
-                    END
-                ) AS mori_swats,
+                    SUM(
+                        CASE
+                            WHEN event_type = 'auth_rejected'
+                            THEN event_count
+                            ELSE 0
+                        END
+                    ) AS mori_swats,
 
-                SUM(
-                    CASE
-                        WHEN event_type = 'retry_stale'
-                        THEN 1
-                        ELSE 0
-                    END
-                ) AS stale_retry_results,
+                    SUM(
+                        CASE
+                            WHEN event_type = 'retry_stale'
+                            THEN event_count
+                            ELSE 0
+                        END
+                    ) AS stale_retry_results,
 
-                SUM(
-                    CASE
-                        WHEN event_type = 'submission'
-                         AND created_at >= ?
-                        THEN 1
-                        ELSE 0
-                    END
-                ) AS initial_submissions_last_minute,
+                    SUM(
+                        CASE
+                            WHEN event_type = 'submission'
+                             AND created_at >= ?
+                            THEN event_count
+                            ELSE 0
+                        END
+                    ) AS initial_submissions_last_minute,
 
-                SUM(
-                    CASE
-                        WHEN event_type IN (
-                            'submission',
-                            'retry'
-                        )
-                         AND created_at >= ?
-                        THEN 1
-                        ELSE 0
-                    END
-                ) AS gameserver_attempts_last_minute
+                    SUM(
+                        CASE
+                            WHEN event_type IN (
+                                'submission',
+                                'retry'
+                            )
+                             AND created_at >= ?
+                            THEN event_count
+                            ELSE 0
+                        END
+                    ) AS gameserver_attempts_last_minute
 
-            FROM submission_events
-            """,
-            (
-                minute_ago,
-                minute_ago,
-            ),
-        ).fetchone()
+                FROM submission_events
+                """,
+                (
+                    minute_ago,
+                    minute_ago,
+                ),
+            ).fetchone()
 
-    return {
-        "event_count": row["event_count"] or 0,
-        "gameserver_attempts": (
-            row["gameserver_attempts"] or 0
-        ),
-        "initial_submissions": (
-            row["initial_submissions"] or 0
-        ),
-        "retry_attempts": (
-            row["retry_attempts"] or 0
-        ),
-        "local_duplicates": (
-            row["local_duplicates"] or 0
-        ),
-        "invalid_events": (
-            row["invalid_events"] or 0
-        ),
-        "mori_swats": row["mori_swats"] or 0,
-        "stale_retry_results": (
-            row["stale_retry_results"] or 0
-        ),
-        "initial_submissions_last_minute": (
-            row["initial_submissions_last_minute"]
-            or 0
-        ),
-        "gameserver_attempts_last_minute": (
-            row["gameserver_attempts_last_minute"]
-            or 0
-        ),
-    }
+            metrics = {
+                "event_count": (
+                    row["event_count"] or 0
+                ),
+                "gameserver_attempts": (
+                    row["gameserver_attempts"]
+                    or 0
+                ),
+                "initial_submissions": (
+                    row["initial_submissions"]
+                    or 0
+                ),
+                "retry_attempts": (
+                    row["retry_attempts"]
+                    or 0
+                ),
+                "local_duplicates": (
+                    row["local_duplicates"]
+                    or 0
+                ),
+                "invalid_events": (
+                    row["invalid_events"]
+                    or 0
+                ),
+                "mori_swats": (
+                    row["mori_swats"] or 0
+                ),
+                "stale_retry_results": (
+                    row["stale_retry_results"]
+                    or 0
+                ),
+                "initial_submissions_last_minute": (
+                    row[
+                        "initial_submissions_last_minute"
+                    ]
+                    or 0
+                ),
+                "gameserver_attempts_last_minute": (
+                    row[
+                        "gameserver_attempts_last_minute"
+                    ]
+                    or 0
+                ),
+            }
+
+    pending = (
+        _pending_counts_by_type()
+    )
+
+    pending_total = sum(
+        pending.values()
+    )
+
+    metrics[
+        "event_count"
+    ] += pending_total
+
+    metrics[
+        "gameserver_attempts"
+    ] += (
+        pending["submission"]
+        + pending["retry"]
+    )
+
+    metrics[
+        "initial_submissions"
+    ] += pending["submission"]
+
+    metrics[
+        "retry_attempts"
+    ] += pending["retry"]
+
+    metrics[
+        "local_duplicates"
+    ] += pending["duplicate"]
+
+    metrics[
+        "invalid_events"
+    ] += pending["invalid"]
+
+    metrics[
+        "mori_swats"
+    ] += pending["auth_rejected"]
+
+    metrics[
+        "stale_retry_results"
+    ] += pending["retry_stale"]
+
+    metrics[
+        "initial_submissions_last_minute"
+    ] += pending["submission"]
+
+    metrics[
+        "gameserver_attempts_last_minute"
+    ] += (
+        pending["submission"]
+        + pending["retry"]
+    )
+
+    return metrics

@@ -8,7 +8,6 @@ from app.core.config import (
     get_submission_port,
     get_submission_timeout,
 )
-from app.db.dashboard import get_dashboard_stats
 
 
 def get_scheduler_status(
@@ -55,14 +54,13 @@ def get_scheduler_status(
     }
 
 
-def get_operational_health(
+def build_operational_health(
     app: FastAPI,
+    stats: dict[str, object],
 ) -> dict[str, object]:
     scheduler = get_scheduler_status(
         app
     )
-
-    stats = get_dashboard_stats()
 
     retryable = int(
         stats["retryable"]
@@ -90,6 +88,7 @@ def get_operational_health(
 
     if scheduler["running"]:
         overall_status = "healthy"
+
     else:
         overall_status = "degraded"
 

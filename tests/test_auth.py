@@ -2,6 +2,7 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 from app.api import flags as flags_api
+from app.db import database
 
 
 VALID_FLAG = "FAUST_" + ("A" * 32)
@@ -107,10 +108,11 @@ def test_mori_allows_known_visitor_into_the_nest(
         "correct-token",
     )
 
-    monkeypatch.setattr(
-        flags_api,
-        "has_flag",
-        lambda flag: True,
+    database.record_submission(
+        VALID_FLAG,
+        state=database.TERMINAL_STATE,
+        response_code="OK",
+        response_message="accepted",
     )
 
     client = create_test_client()

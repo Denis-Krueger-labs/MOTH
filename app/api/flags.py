@@ -1,10 +1,14 @@
+import asyncio
 import re
+
+from uuid import uuid4
 
 from fastapi import (
     APIRouter,
     Depends,
     HTTPException,
 )
+
 from pydantic import (
     BaseModel,
     Field,
@@ -12,18 +16,33 @@ from pydantic import (
 )
 
 from app.core.auth import require_api_token
-from app.core.submission_service import submit_once
+
+from app.core.submission_capacity import (
+    SubmissionCapacity,
+)
+
+from app.core.submission_service import (
+    submit_once,
+)
+
 from app.core.submitter import (
     submit_flag as submit_to_gameserver,
 )
+
 from app.db.database import (
     RETRYABLE_STATE,
     TERMINAL_STATE,
-    has_flag,
-    record_submission,
 )
+
 from app.db.events import (
+    record_batched_event_safely,
     record_event_safely,
+)
+
+from app.db.submission_gate import (
+    claim_initial_submission,
+    finalize_initial_submission,
+    release_initial_submission,
 )
 
 
@@ -41,6 +60,10 @@ FAUST_FLAG_PATTERN = re.compile(
 )
 
 MAX_BATCH_SIZE = 500
+MAX_BATCH_CONCURRENCY = 8
+
+
+submission_capacity = SubmissionCapacity()
 
 
 def clean_and_validate_flag(
@@ -54,7 +77,9 @@ def clean_and_validate_flag(
         )
 
     if (
-        FAUST_FLAG_PATTERN.fullmatch(value)
+        FAUST_FLAG_PATTERN.fullmatch(
+            value
+        )
         is None
     ):
         raise ValueError(
@@ -79,7 +104,9 @@ class FlagSubmission(BaseModel):
         cls,
         value: str,
     ) -> str:
-        return clean_and_validate_flag(value)
+        return clean_and_validate_flag(
+            value
+        )
 
 
 class BatchFlagSubmission(BaseModel):
@@ -98,7 +125,38 @@ async def _process_valid_flag(
     service: str | None,
     source: str | None,
 ) -> dict[str, object]:
-    if has_flag(flag):
+    worker_id = (
+        f"initial-{uuid4().hex}"
+    )
+
+    claim = claim_initial_submission(
+        flag,
+        worker_id,
+    )
+
+    if claim.status == "existing":
+        if (
+            claim.existing_state
+            == RETRYABLE_STATE
+        ):
+            record_event_safely(
+                "duplicate",
+                code="LOCAL_RETRY",
+                state="retryable",
+                service=service,
+                source=source,
+            )
+
+            return {
+                "status": "queued",
+                "code": "LOCAL_RETRY",
+                "message": (
+                    "mof already has this "
+                    "offering queued for retry"
+                ),
+                "remembered": False,
+            }
+
         record_event_safely(
             "duplicate",
             code="LOCAL",
@@ -111,44 +169,188 @@ async def _process_valid_flag(
             "status": "duplicate",
             "code": "LOCAL",
             "message": (
-                "mof has already seen this offering"
+                "mof has already seen "
+                "this offering"
             ),
             "remembered": True,
         }
 
-    outcome = await submit_once(
-        flag,
-        submitter=submit_to_gameserver,
+    if claim.status == "busy":
+        record_event_safely(
+            "duplicate",
+            code="IN_FLIGHT",
+            state="in_flight",
+            service=service,
+            source=source,
+        )
+
+        return {
+            "status": "in_flight",
+            "code": "IN_FLIGHT",
+            "message": (
+                "MORI is already guarding "
+                "this offering while mof "
+                "submits it"
+            ),
+            "remembered": False,
+        }
+
+    if (
+        claim.status != "claimed"
+        or claim.lease_token is None
+    ):
+        raise RuntimeError(
+            "MORI produced an invalid "
+            "initial submission claim"
+        )
+
+    acquired = (
+        submission_capacity.try_acquire()
     )
 
-    if outcome.terminal:
-        state = TERMINAL_STATE
+    if not acquired:
+        release_initial_submission(
+            flag,
+            worker_id,
+            claim.lease_token,
+        )
+
+        record_batched_event_safely(
+            "submission_overload",
+            code="OVERLOADED",
+            state="rejected",
+            service=service,
+            source=source,
+        )
+
+        return {
+            "status": "overloaded",
+            "code": "OVERLOADED",
+            "message": (
+                "MORI refuses another submission "
+                "until the nest has capacity"
+            ),
+            "remembered": False,
+        }
+
+    finalized = False
+
+    try:
+        outcome = await submit_once(
+            flag,
+            submitter=submit_to_gameserver,
+        )
+
+        if outcome.terminal:
+            state = TERMINAL_STATE
+        else:
+            state = RETRYABLE_STATE
+
+        finalized = (
+            finalize_initial_submission(
+                flag,
+                worker_id,
+                claim.lease_token,
+                state=state,
+                response_code=outcome.code,
+                response_message=outcome.message,
+                service=service,
+                source=source,
+            )
+        )
+
+        if not finalized:
+            record_batched_event_safely(
+                "initial_stale",
+                code="STALE_CLAIM",
+                state="rejected",
+                service=service,
+                source=source,
+            )
+
+            return {
+                "status": "retryable",
+                "code": "STALE_CLAIM",
+                "message": (
+                    "MORI rejected a stale "
+                    "initial submission result; "
+                    "retry the offering"
+                ),
+                "remembered": False,
+            }
+
+        return {
+            "status": "submitted",
+            "code": outcome.code,
+            "message": outcome.message,
+            "remembered": (
+                outcome.terminal
+            ),
+        }
+
+    finally:
+        submission_capacity.release()
+
+        if not finalized:
+            release_initial_submission(
+                flag,
+                worker_id,
+                claim.lease_token,
+            )
+
+
+def _update_batch_summary(
+    summary: dict[str, int],
+    processed: dict[str, object],
+) -> None:
+    code = processed["code"]
+
+    if (
+        processed["status"]
+        == "duplicate"
+    ):
+        summary[
+            "duplicate"
+        ] += 1
+
+    elif (
+        processed["status"]
+        == "in_flight"
+    ):
+        summary[
+            "in_flight"
+        ] += 1
+
+    elif (
+        processed["status"]
+        == "overloaded"
+    ):
+        summary[
+            "overloaded"
+        ] += 1
+
+    elif code == "DUP":
+        summary[
+            "duplicate"
+        ] += 1
+
+    elif code == "OK":
+        summary[
+            "accepted"
+        ] += 1
+
+    elif (
+        processed["remembered"]
+        is False
+    ):
+        summary[
+            "retryable"
+        ] += 1
+
     else:
-        state = RETRYABLE_STATE
-
-    record_submission(
-        flag,
-        state=state,
-        response_code=outcome.code,
-        response_message=outcome.message,
-        service=service,
-        source=source,
-    )
-
-    record_event_safely(
-        "submission",
-        code=outcome.code,
-        state=state,
-        service=service,
-        source=source,
-    )
-
-    return {
-        "status": "submitted",
-        "code": outcome.code,
-        "message": outcome.message,
-        "remembered": outcome.terminal,
-    }
+        summary[
+            "terminal_other"
+        ] += 1
 
 
 @router.post("/flags")
@@ -161,13 +363,28 @@ async def submit_flag(
         source=submission.source,
     )
 
+    if result["code"] in {
+        "OVERLOADED",
+        "STALE_CLAIM",
+    }:
+        raise HTTPException(
+            status_code=503,
+            detail=result["message"],
+            headers={
+                "Retry-After": "1",
+            },
+        )
+
     if result["code"] == "TIMEOUT":
         raise HTTPException(
             status_code=504,
             detail=result["message"],
         )
 
-    if result["code"] == "CONNECTION_ERROR":
+    if (
+        result["code"]
+        == "CONNECTION_ERROR"
+    ):
         raise HTTPException(
             status_code=502,
             detail=result["message"],
@@ -181,29 +398,44 @@ async def submit_flag_batch(
     submission: BatchFlagSubmission,
 ):
     summary = {
-        "received": len(submission.flags),
+        "received": len(
+            submission.flags
+        ),
         "accepted": 0,
         "duplicate": 0,
         "terminal_other": 0,
         "retryable": 0,
         "invalid": 0,
+        "in_flight": 0,
+        "overloaded": 0,
     }
 
-    results = []
-
-    seen: set[str] = set()
-
-    first_results: dict[
-        str,
+    results_by_index: dict[
+        int,
         dict[str, object],
     ] = {}
+
+    first_index_by_flag: dict[
+        str,
+        int,
+    ] = {}
+
+    unique_flags: list[
+        tuple[int, str]
+    ] = []
+
+    duplicate_flags: list[
+        tuple[int, str]
+    ] = []
 
     for index, raw_flag in enumerate(
         submission.flags
     ):
         try:
-            flag = clean_and_validate_flag(
-                raw_flag
+            flag = (
+                clean_and_validate_flag(
+                    raw_flag
+                )
             )
 
         except ValueError as exc:
@@ -215,7 +447,7 @@ async def submit_flag_batch(
                 source=submission.source,
             )
 
-            result = {
+            results_by_index[index] = {
                 "index": index,
                 "status": "invalid",
                 "code": "INVALID_FORMAT",
@@ -223,75 +455,138 @@ async def submit_flag_batch(
                 "remembered": False,
             }
 
-            summary["invalid"] += 1
-            results.append(result)
+            summary[
+                "invalid"
+            ] += 1
 
             continue
 
-        if flag in seen:
-            first_result = first_results[
-                flag
-            ]
-
-            record_event_safely(
-                "duplicate",
-                code="BATCH",
-                state="local",
-                service=submission.service,
-                source=submission.source,
+        if flag in first_index_by_flag:
+            duplicate_flags.append(
+                (
+                    index,
+                    flag,
+                )
             )
 
-            result = {
-                "index": index,
-                "status": "duplicate",
-                "code": "BATCH",
-                "message": (
-                    "mof found this offering "
-                    "twice in the same bundle"
-                ),
-                "remembered": (
-                    first_result["remembered"]
-                ),
-            }
-
-            summary["duplicate"] += 1
-            results.append(result)
-
             continue
 
-        seen.add(flag)
+        first_index_by_flag[
+            flag
+        ] = index
 
-        processed = await _process_valid_flag(
-            flag,
-            service=submission.service,
-            source=submission.source,
+        unique_flags.append(
+            (
+                index,
+                flag,
+            )
         )
 
-        first_results[flag] = processed
+    semaphore = asyncio.Semaphore(
+        MAX_BATCH_CONCURRENCY
+    )
 
-        result = {
+    async def process_unique(
+        index: int,
+        flag: str,
+    ) -> tuple[
+        int,
+        str,
+        dict[str, object],
+    ]:
+        async with semaphore:
+            processed = (
+                await _process_valid_flag(
+                    flag,
+                    service=(
+                        submission.service
+                    ),
+                    source=(
+                        submission.source
+                    ),
+                )
+            )
+
+        return (
+            index,
+            flag,
+            processed,
+        )
+
+    processed_unique = await asyncio.gather(
+        *(
+            process_unique(
+                index,
+                flag,
+            )
+            for index, flag in unique_flags
+        )
+    )
+
+    first_results: dict[
+        str,
+        dict[str, object],
+    ] = {}
+
+    for (
+        index,
+        flag,
+        processed,
+    ) in processed_unique:
+        first_results[
+            flag
+        ] = processed
+
+        results_by_index[index] = {
             "index": index,
             **processed,
         }
 
-        results.append(result)
+        _update_batch_summary(
+            summary,
+            processed,
+        )
 
-        code = processed["code"]
+    for index, flag in duplicate_flags:
+        first_result = (
+            first_results[
+                flag
+            ]
+        )
 
-        if processed["status"] == "duplicate":
-            summary["duplicate"] += 1
+        record_event_safely(
+            "duplicate",
+            code="BATCH",
+            state="local",
+            service=submission.service,
+            source=submission.source,
+        )
 
-        elif code == "DUP":
-            summary["duplicate"] += 1
+        results_by_index[index] = {
+            "index": index,
+            "status": "duplicate",
+            "code": "BATCH",
+            "message": (
+                "mof found this offering "
+                "twice in the same bundle"
+            ),
+            "remembered": (
+                first_result[
+                    "remembered"
+                ]
+            ),
+        }
 
-        elif code == "OK":
-            summary["accepted"] += 1
+        summary[
+            "duplicate"
+        ] += 1
 
-        elif processed["remembered"] is False:
-            summary["retryable"] += 1
-
-        else:
-            summary["terminal_other"] += 1
+    results = [
+        results_by_index[index]
+        for index in range(
+            len(submission.flags)
+        )
+    ]
 
     return {
         "status": "processed",
