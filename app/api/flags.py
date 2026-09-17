@@ -37,6 +37,29 @@ FAUST_FLAG_PATTERN = re.compile(
     r"FAUST_[A-Za-z0-9/+]{32}"
 )
 
+MAX_BATCH_SIZE = 500
+
+
+def clean_and_validate_flag(
+    value: str,
+) -> str:
+    value = value.strip()
+
+    if not value:
+        raise ValueError(
+            "mof refuses to carry an empty flag"
+        )
+
+    if (
+        FAUST_FLAG_PATTERN.fullmatch(value)
+        is None
+    ):
+        raise ValueError(
+            "mof does not recognize this as a FAUST flag"
+        )
+
+    return value
+
 
 class FlagSubmission(BaseModel):
     flag: str = Field(
@@ -49,33 +72,30 @@ class FlagSubmission(BaseModel):
 
     @field_validator("flag")
     @classmethod
-    def clean_and_validate_flag(
+    def validate_flag(
         cls,
         value: str,
     ) -> str:
-        value = value.strip()
-
-        if not value:
-            raise ValueError(
-                "mof refuses to carry an empty flag"
-            )
-
-        if (
-            FAUST_FLAG_PATTERN.fullmatch(value)
-            is None
-        ):
-            raise ValueError(
-                "mof does not recognize this as a FAUST flag"
-            )
-
-        return value
+        return clean_and_validate_flag(value)
 
 
-@router.post("/flags")
-async def submit_flag(
-    submission: FlagSubmission,
-):
-    if has_flag(submission.flag):
+class BatchFlagSubmission(BaseModel):
+    flags: list[str] = Field(
+        min_length=1,
+        max_length=MAX_BATCH_SIZE,
+    )
+
+    service: str | None = None
+    source: str | None = None
+
+
+async def _process_valid_flag(
+    flag: str,
+    *,
+    service: str | None,
+    source: str | None,
+) -> dict[str, object]:
+    if has_flag(flag):
         return {
             "status": "duplicate",
             "code": "LOCAL",
@@ -86,7 +106,7 @@ async def submit_flag(
         }
 
     outcome = await submit_once(
-        submission.flag,
+        flag,
         submitter=submit_to_gameserver,
     )
 
@@ -96,29 +116,149 @@ async def submit_flag(
         state = RETRYABLE_STATE
 
     record_submission(
-        submission.flag,
+        flag,
         state=state,
         response_code=outcome.code,
         response_message=outcome.message,
-        service=submission.service,
-        source=submission.source,
+        service=service,
+        source=source,
     )
-
-    if outcome.code == "TIMEOUT":
-        raise HTTPException(
-            status_code=504,
-            detail=outcome.message,
-        )
-
-    if outcome.code == "CONNECTION_ERROR":
-        raise HTTPException(
-            status_code=502,
-            detail=outcome.message,
-        )
 
     return {
         "status": "submitted",
         "code": outcome.code,
         "message": outcome.message,
         "remembered": outcome.terminal,
+    }
+
+
+@router.post("/flags")
+async def submit_flag(
+    submission: FlagSubmission,
+):
+    result = await _process_valid_flag(
+        submission.flag,
+        service=submission.service,
+        source=submission.source,
+    )
+
+    if result["code"] == "TIMEOUT":
+        raise HTTPException(
+            status_code=504,
+            detail=result["message"],
+        )
+
+    if result["code"] == "CONNECTION_ERROR":
+        raise HTTPException(
+            status_code=502,
+            detail=result["message"],
+        )
+
+    return result
+
+
+@router.post("/flags/batch")
+async def submit_flag_batch(
+    submission: BatchFlagSubmission,
+):
+    summary = {
+        "received": len(submission.flags),
+        "accepted": 0,
+        "duplicate": 0,
+        "terminal_other": 0,
+        "retryable": 0,
+        "invalid": 0,
+    }
+
+    results = []
+
+    seen: set[str] = set()
+    first_results: dict[
+        str,
+        dict[str, object],
+    ] = {}
+
+    for index, raw_flag in enumerate(
+        submission.flags
+    ):
+        try:
+            flag = clean_and_validate_flag(
+                raw_flag
+            )
+
+        except ValueError as exc:
+            result = {
+                "index": index,
+                "status": "invalid",
+                "code": "INVALID_FORMAT",
+                "message": str(exc),
+                "remembered": False,
+            }
+
+            summary["invalid"] += 1
+            results.append(result)
+
+            continue
+
+        if flag in seen:
+            first_result = first_results[
+                flag
+            ]
+
+            result = {
+                "index": index,
+                "status": "duplicate",
+                "code": "BATCH",
+                "message": (
+                    "mof found this offering "
+                    "twice in the same bundle"
+                ),
+                "remembered": (
+                    first_result["remembered"]
+                ),
+            }
+
+            summary["duplicate"] += 1
+            results.append(result)
+
+            continue
+
+        seen.add(flag)
+
+        processed = await _process_valid_flag(
+            flag,
+            service=submission.service,
+            source=submission.source,
+        )
+
+        first_results[flag] = processed
+
+        result = {
+            "index": index,
+            **processed,
+        }
+
+        results.append(result)
+
+        code = processed["code"]
+
+        if processed["status"] == "duplicate":
+            summary["duplicate"] += 1
+
+        elif code == "DUP":
+            summary["duplicate"] += 1
+
+        elif code == "OK":
+            summary["accepted"] += 1
+
+        elif processed["remembered"] is False:
+            summary["retryable"] += 1
+
+        else:
+            summary["terminal_other"] += 1
+
+    return {
+        "status": "processed",
+        "summary": summary,
+        "results": results,
     }
