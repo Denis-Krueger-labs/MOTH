@@ -1,7 +1,7 @@
 import logging
 import sqlite3
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 from app.db import database
 
@@ -27,6 +27,21 @@ def _utc_now() -> str:
     return datetime.now(
         timezone.utc
     ).isoformat()
+
+
+def _empty_event_metrics() -> dict[str, int]:
+    return {
+        "event_count": 0,
+        "gameserver_attempts": 0,
+        "initial_submissions": 0,
+        "retry_attempts": 0,
+        "local_duplicates": 0,
+        "invalid_events": 0,
+        "mori_swats": 0,
+        "stale_retry_results": 0,
+        "initial_submissions_last_minute": 0,
+        "gameserver_attempts_last_minute": 0,
+    }
 
 
 def initialize_event_history() -> None:
@@ -198,3 +213,155 @@ def get_recent_events(
         )
         for row in rows
     ]
+
+
+def get_event_metrics() -> dict[str, int]:
+    now = datetime.fromisoformat(
+        _utc_now()
+    )
+
+    minute_ago = (
+        now - timedelta(minutes=1)
+    ).isoformat()
+
+    with sqlite3.connect(
+        database.DATABASE_PATH
+    ) as connection:
+        connection.row_factory = sqlite3.Row
+
+        table_exists = connection.execute(
+            """
+            SELECT 1
+            FROM sqlite_master
+            WHERE
+                type = 'table'
+                AND name = 'submission_events'
+            """
+        ).fetchone()
+
+        if table_exists is None:
+            return _empty_event_metrics()
+
+        row = connection.execute(
+            """
+            SELECT
+                COUNT(*) AS event_count,
+
+                SUM(
+                    CASE
+                        WHEN event_type IN (
+                            'submission',
+                            'retry'
+                        )
+                        THEN 1
+                        ELSE 0
+                    END
+                ) AS gameserver_attempts,
+
+                SUM(
+                    CASE
+                        WHEN event_type = 'submission'
+                        THEN 1
+                        ELSE 0
+                    END
+                ) AS initial_submissions,
+
+                SUM(
+                    CASE
+                        WHEN event_type = 'retry'
+                        THEN 1
+                        ELSE 0
+                    END
+                ) AS retry_attempts,
+
+                SUM(
+                    CASE
+                        WHEN event_type = 'duplicate'
+                        THEN 1
+                        ELSE 0
+                    END
+                ) AS local_duplicates,
+
+                SUM(
+                    CASE
+                        WHEN event_type = 'invalid'
+                        THEN 1
+                        ELSE 0
+                    END
+                ) AS invalid_events,
+
+                SUM(
+                    CASE
+                        WHEN event_type = 'auth_rejected'
+                        THEN 1
+                        ELSE 0
+                    END
+                ) AS mori_swats,
+
+                SUM(
+                    CASE
+                        WHEN event_type = 'retry_stale'
+                        THEN 1
+                        ELSE 0
+                    END
+                ) AS stale_retry_results,
+
+                SUM(
+                    CASE
+                        WHEN event_type = 'submission'
+                         AND created_at >= ?
+                        THEN 1
+                        ELSE 0
+                    END
+                ) AS initial_submissions_last_minute,
+
+                SUM(
+                    CASE
+                        WHEN event_type IN (
+                            'submission',
+                            'retry'
+                        )
+                         AND created_at >= ?
+                        THEN 1
+                        ELSE 0
+                    END
+                ) AS gameserver_attempts_last_minute
+
+            FROM submission_events
+            """,
+            (
+                minute_ago,
+                minute_ago,
+            ),
+        ).fetchone()
+
+    return {
+        "event_count": row["event_count"] or 0,
+        "gameserver_attempts": (
+            row["gameserver_attempts"] or 0
+        ),
+        "initial_submissions": (
+            row["initial_submissions"] or 0
+        ),
+        "retry_attempts": (
+            row["retry_attempts"] or 0
+        ),
+        "local_duplicates": (
+            row["local_duplicates"] or 0
+        ),
+        "invalid_events": (
+            row["invalid_events"] or 0
+        ),
+        "mori_swats": row["mori_swats"] or 0,
+        "stale_retry_results": (
+            row["stale_retry_results"] or 0
+        ),
+        "initial_submissions_last_minute": (
+            row["initial_submissions_last_minute"]
+            or 0
+        ),
+        "gameserver_attempts_last_minute": (
+            row["gameserver_attempts_last_minute"]
+            or 0
+        ),
+    }

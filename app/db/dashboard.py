@@ -2,6 +2,7 @@ import sqlite3
 from datetime import datetime, timezone
 
 from app.db import database
+from app.db import events
 
 
 def _utc_now() -> str:
@@ -130,7 +131,7 @@ def get_dashboard_stats() -> dict[str, object]:
             ),
         ).fetchone()[0]
 
-    return {
+    stats = {
         "unique_flags": totals["unique_flags"] or 0,
         "terminal": totals["terminal"] or 0,
         "retryable": totals["retryable"] or 0,
@@ -152,3 +153,9 @@ def get_dashboard_stats() -> dict[str, object]:
         ),
         "oldest_retry_at": oldest_retry,
     }
+
+    stats.update(
+        events.get_event_metrics()
+    )
+
+    return stats
