@@ -1,7 +1,7 @@
 import os
 import sqlite3
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 from app.core.crypto import (
@@ -23,6 +23,9 @@ VALID_SUBMISSION_STATES = {
     RETRYABLE_STATE,
 }
 
+BASE_RETRY_DELAY_SECONDS = 5
+MAX_RETRY_DELAY_SECONDS = 300
+
 
 @dataclass
 class RetryCandidate:
@@ -34,12 +37,46 @@ class RetryCandidate:
     source: str | None
     created_at: str | None
     updated_at: str | None
+    retry_count: int
+    next_retry_at: str | None
+    last_attempt_at: str | None
 
 
 def _utc_now() -> str:
     return datetime.now(
         timezone.utc
     ).isoformat()
+
+
+def _add_seconds(
+    timestamp: str,
+    seconds: int,
+) -> str:
+    value = datetime.fromisoformat(timestamp)
+
+    return (
+        value
+        + timedelta(seconds=seconds)
+    ).isoformat()
+
+
+def _retry_delay_seconds(
+    retry_count: int,
+) -> int:
+    if retry_count <= 0:
+        raise ValueError(
+            "mof cannot schedule retry number zero"
+        )
+
+    delay = (
+        BASE_RETRY_DELAY_SECONDS
+        * (2 ** (retry_count - 1))
+    )
+
+    return min(
+        delay,
+        MAX_RETRY_DELAY_SECONDS,
+    )
 
 
 def _get_columns(
@@ -89,6 +126,19 @@ def _ensure_columns(
             "ALTER TABLE flags "
             "ADD COLUMN updated_at TEXT"
         ),
+        "retry_count": (
+            "ALTER TABLE flags "
+            "ADD COLUMN retry_count "
+            "INTEGER NOT NULL DEFAULT 0"
+        ),
+        "next_retry_at": (
+            "ALTER TABLE flags "
+            "ADD COLUMN next_retry_at TEXT"
+        ),
+        "last_attempt_at": (
+            "ALTER TABLE flags "
+            "ADD COLUMN last_attempt_at TEXT"
+        ),
     }
 
     for column, statement in migrations.items():
@@ -113,7 +163,10 @@ def initialize_database() -> None:
                 service TEXT,
                 source TEXT,
                 created_at TEXT,
-                updated_at TEXT
+                updated_at TEXT,
+                retry_count INTEGER NOT NULL DEFAULT 0,
+                next_retry_at TEXT,
+                last_attempt_at TEXT
             )
             """
         )
@@ -146,6 +199,33 @@ def initialize_database() -> None:
             SET updated_at = created_at
             WHERE updated_at IS NULL
             """
+        )
+
+        connection.execute(
+            """
+            UPDATE flags
+            SET retry_count = 0
+            WHERE retry_count IS NULL
+            """
+        )
+
+        connection.execute(
+            """
+            UPDATE flags
+            SET last_attempt_at = updated_at
+            WHERE last_attempt_at IS NULL
+              AND updated_at IS NOT NULL
+            """
+        )
+
+        connection.execute(
+            """
+            UPDATE flags
+            SET next_retry_at = updated_at
+            WHERE submission_state = ?
+              AND next_retry_at IS NULL
+            """,
+            (RETRYABLE_STATE,),
         )
 
 
@@ -193,6 +273,50 @@ def record_submission(
     with sqlite3.connect(
         DATABASE_PATH
     ) as connection:
+        connection.row_factory = sqlite3.Row
+
+        existing = connection.execute(
+            """
+            SELECT
+                retry_count,
+                created_at
+            FROM flags
+            WHERE flag_fingerprint = ?
+            LIMIT 1
+            """,
+            (fingerprint,),
+        ).fetchone()
+
+        if existing is None:
+            previous_retry_count = 0
+            created_at = now
+        else:
+            previous_retry_count = (
+                existing["retry_count"] or 0
+            )
+            created_at = (
+                existing["created_at"]
+                or now
+            )
+
+        if state == RETRYABLE_STATE:
+            retry_count = (
+                previous_retry_count + 1
+            )
+
+            delay = _retry_delay_seconds(
+                retry_count
+            )
+
+            next_retry_at = _add_seconds(
+                now,
+                delay,
+            )
+
+        else:
+            retry_count = previous_retry_count
+            next_retry_at = None
+
         connection.execute(
             """
             INSERT INTO flags (
@@ -205,9 +329,14 @@ def record_submission(
                 service,
                 source,
                 created_at,
-                updated_at
+                updated_at,
+                retry_count,
+                next_retry_at,
+                last_attempt_at
             )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            VALUES (
+                ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
+            )
 
             ON CONFLICT(flag_fingerprint)
             DO UPDATE SET
@@ -224,7 +353,10 @@ def record_submission(
                     excluded.source,
                     flags.source
                 ),
-                updated_at = excluded.updated_at
+                updated_at = excluded.updated_at,
+                retry_count = excluded.retry_count,
+                next_retry_at = excluded.next_retry_at,
+                last_attempt_at = excluded.last_attempt_at
             """,
             (
                 ciphertext,
@@ -235,7 +367,10 @@ def record_submission(
                 response_message,
                 service,
                 source,
+                created_at,
                 now,
+                retry_count,
+                next_retry_at,
                 now,
             ),
         )
@@ -243,7 +378,7 @@ def record_submission(
 
 def get_submission_record(
     flag: str,
-) -> dict[str, str | None] | None:
+) -> dict[str, str | int | None] | None:
     fingerprint = fingerprint_flag(flag)
 
     with sqlite3.connect(
@@ -260,7 +395,10 @@ def get_submission_record(
                 service,
                 source,
                 created_at,
-                updated_at
+                updated_at,
+                retry_count,
+                next_retry_at,
+                last_attempt_at
             FROM flags
             WHERE flag_fingerprint = ?
             LIMIT 1
@@ -272,6 +410,36 @@ def get_submission_record(
         return None
 
     return dict(row)
+
+
+def _rows_to_retry_candidates(
+    rows: list[sqlite3.Row],
+) -> list[RetryCandidate]:
+    candidates = []
+
+    for row in rows:
+        flag = decrypt_flag(
+            row["flag_nonce"],
+            row["flag_ciphertext"],
+        )
+
+        candidates.append(
+            RetryCandidate(
+                id=row["id"],
+                flag=flag,
+                response_code=row["response_code"],
+                response_message=row["response_message"],
+                service=row["service"],
+                source=row["source"],
+                created_at=row["created_at"],
+                updated_at=row["updated_at"],
+                retry_count=row["retry_count"],
+                next_retry_at=row["next_retry_at"],
+                last_attempt_at=row["last_attempt_at"],
+            )
+        )
+
+    return candidates
 
 
 def get_retryable_submissions(
@@ -298,7 +466,10 @@ def get_retryable_submissions(
                 service,
                 source,
                 created_at,
-                updated_at
+                updated_at,
+                retry_count,
+                next_retry_at,
+                last_attempt_at
             FROM flags
             WHERE submission_state = ?
             ORDER BY
@@ -312,28 +483,58 @@ def get_retryable_submissions(
             ),
         ).fetchall()
 
-    candidates = []
+    return _rows_to_retry_candidates(rows)
 
-    for row in rows:
-        flag = decrypt_flag(
-            row["flag_nonce"],
-            row["flag_ciphertext"],
+
+def get_due_retryable_submissions(
+    limit: int = 100,
+) -> list[RetryCandidate]:
+    if limit <= 0:
+        raise ValueError(
+            "mof needs a positive retry queue limit"
         )
 
-        candidates.append(
-            RetryCandidate(
-                id=row["id"],
-                flag=flag,
-                response_code=row["response_code"],
-                response_message=row["response_message"],
-                service=row["service"],
-                source=row["source"],
-                created_at=row["created_at"],
-                updated_at=row["updated_at"],
-            )
-        )
+    now = _utc_now()
 
-    return candidates
+    with sqlite3.connect(
+        DATABASE_PATH
+    ) as connection:
+        connection.row_factory = sqlite3.Row
+
+        rows = connection.execute(
+            """
+            SELECT
+                id,
+                flag_ciphertext,
+                flag_nonce,
+                response_code,
+                response_message,
+                service,
+                source,
+                created_at,
+                updated_at,
+                retry_count,
+                next_retry_at,
+                last_attempt_at
+            FROM flags
+            WHERE submission_state = ?
+              AND (
+                    next_retry_at IS NULL
+                    OR next_retry_at <= ?
+              )
+            ORDER BY
+                next_retry_at ASC,
+                id ASC
+            LIMIT ?
+            """,
+            (
+                RETRYABLE_STATE,
+                now,
+                limit,
+            ),
+        ).fetchall()
+
+    return _rows_to_retry_candidates(rows)
 
 
 def store_flag(flag: str) -> bool:
