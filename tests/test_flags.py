@@ -11,7 +11,13 @@ from app.core.submitter import (
     SubmissionResult,
     SubmissionTimeoutError,
 )
-from app.db.database import has_flag, store_flag
+from app.db.database import (
+    RETRYABLE_STATE,
+    TERMINAL_STATE,
+    get_submission_record,
+    has_flag,
+    store_flag,
+)
 
 
 VALID_FLAG = "FAUST_" + ("A" * 32)
@@ -19,6 +25,7 @@ SECOND_VALID_FLAG = "FAUST_" + ("B" * 32)
 THIRD_VALID_FLAG = "FAUST_" + ("C" * 32)
 FOURTH_VALID_FLAG = "FAUST_" + ("D" * 32)
 FIFTH_VALID_FLAG = "FAUST_" + ("E" * 32)
+SIXTH_VALID_FLAG = "FAUST_" + ("F" * 32)
 
 
 def test_mof_refuses_empty_flag():
@@ -149,6 +156,8 @@ def test_mof_submits_new_flag_and_remembers_it(
         flags_api.submit_flag(
             FlagSubmission(
                 flag=flag,
+                service="test-service",
+                source="pytest",
             )
         )
     )
@@ -161,6 +170,15 @@ def test_mof_submits_new_flag_and_remembers_it(
     }
 
     assert has_flag(flag) is True
+
+    record = get_submission_record(flag)
+
+    assert record is not None
+    assert record["submission_state"] == TERMINAL_STATE
+    assert record["response_code"] == "OK"
+    assert record["response_message"] == "accepted"
+    assert record["service"] == "test-service"
+    assert record["source"] == "pytest"
 
 
 def test_mof_does_not_submit_local_duplicate(
@@ -200,7 +218,7 @@ def test_mof_does_not_submit_local_duplicate(
     assert result["remembered"] is True
 
 
-def test_mof_does_not_remember_gameserver_error(
+def test_mof_records_gameserver_error_as_retryable(
     test_database,
     monkeypatch,
 ):
@@ -228,6 +246,8 @@ def test_mof_does_not_remember_gameserver_error(
         flags_api.submit_flag(
             FlagSubmission(
                 flag=flag,
+                service="test-service",
+                source="pytest",
             )
         )
     )
@@ -236,8 +256,63 @@ def test_mof_does_not_remember_gameserver_error(
     assert result["remembered"] is False
     assert has_flag(flag) is False
 
+    record = get_submission_record(flag)
 
-def test_mof_translates_silent_lamp_to_504(
+    assert record is not None
+    assert record["submission_state"] == RETRYABLE_STATE
+    assert record["response_code"] == "ERR"
+    assert (
+        record["response_message"]
+        == "try again later"
+    )
+    assert record["service"] == "test-service"
+    assert record["source"] == "pytest"
+
+
+def test_mof_treats_unknown_response_as_retryable(
+    test_database,
+    monkeypatch,
+):
+    flag = SIXTH_VALID_FLAG
+
+    async def fake_submit(
+        flag: str,
+        host: str,
+        port: int,
+        timeout: float,
+    ):
+        return SubmissionResult(
+            flag=flag,
+            code="MYSTERY",
+            message="new species of lämp",
+        )
+
+    monkeypatch.setattr(
+        flags_api,
+        "submit_to_gameserver",
+        fake_submit,
+    )
+
+    result = asyncio.run(
+        flags_api.submit_flag(
+            FlagSubmission(
+                flag=flag,
+            )
+        )
+    )
+
+    assert result["code"] == "MYSTERY"
+    assert result["remembered"] is False
+    assert has_flag(flag) is False
+
+    record = get_submission_record(flag)
+
+    assert record is not None
+    assert record["submission_state"] == RETRYABLE_STATE
+    assert record["response_code"] == "MYSTERY"
+
+
+def test_mof_records_silent_lamp_as_retryable(
     test_database,
     monkeypatch,
 ):
@@ -264,6 +339,8 @@ def test_mof_translates_silent_lamp_to_504(
             flags_api.submit_flag(
                 FlagSubmission(
                     flag=flag,
+                    service="test-service",
+                    source="pytest",
                 )
             )
         )
@@ -271,8 +348,18 @@ def test_mof_translates_silent_lamp_to_504(
     assert error.value.status_code == 504
     assert has_flag(flag) is False
 
+    record = get_submission_record(flag)
 
-def test_mof_translates_missing_lamp_to_502(
+    assert record is not None
+    assert record["submission_state"] == RETRYABLE_STATE
+    assert record["response_code"] == "TIMEOUT"
+    assert (
+        record["response_message"]
+        == "mof waited for the lämp, but it never answered"
+    )
+
+
+def test_mof_records_missing_lamp_as_retryable(
     test_database,
     monkeypatch,
 ):
@@ -299,9 +386,21 @@ def test_mof_translates_missing_lamp_to_502(
             flags_api.submit_flag(
                 FlagSubmission(
                     flag=flag,
+                    service="test-service",
+                    source="pytest",
                 )
             )
         )
 
     assert error.value.status_code == 502
     assert has_flag(flag) is False
+
+    record = get_submission_record(flag)
+
+    assert record is not None
+    assert record["submission_state"] == RETRYABLE_STATE
+    assert record["response_code"] == "CONNECTION_ERROR"
+    assert (
+        record["response_message"]
+        == "mof could not find the lämp"
+    )
