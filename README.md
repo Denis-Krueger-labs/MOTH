@@ -1,429 +1,308 @@
 # MOTH
 
-**Multi-Operator Transmission Hub**
+> Multi-Operator Transmission Hub
+> A flag submission relay for FAUST CTF with encrypted persistence, retry logic, concurrency protection, and a planned operator dashboard.
+
+MOTH is designed to make flag submission intentionally boring for exploit authors and operators.
+
+The ideal workflow is:
 
 ```text
-ཐི༏ཋྀ    ཐིཋྀ    ʚïɞ    ᖭི༏ᖫྀ
-
-࿔‧ ֶָ֢˚˖𐦍˖˚ֶָ֢ ‧࿔
-
-⁺‧₊˚ ཐི⋆♱⋆ཋྀ ˚₊‧⁺
+exploit finds flag
+→ send flag to MOTH
+→ go back to exploiting
 ```
 
-> Internal TTZ team documentation for the FAUST CTF flag relay.
-
-MOTH is a lightweight authenticated FastAPI service that accepts captured FAUST flags from operators and exploit scripts, validates and deduplicates them, forwards them to the submission backend, and stores terminal results locally using encrypted storage.
-
-MORI guards the entrance.
+MOTH handles validation, deduplication, gameserver submission, persistence, retry scheduling, concurrency protection, and eventually operator visibility.
 
 Mof carries the flags.
 
-```text
-/•᷅‎‎•᷄\੭       ཐི༏ཋྀ
- security        delivery
-```
+MORI guards the nest.
 
 ---
 
-## Repository Status
+## Current status
 
-This TTZ repository is the **active private development repository**.
+MOTH is under active development.
 
-The public GitHub repository represents a sanitized pre-competition snapshot.
+Current backend status:
 
-```text
-TTZ private Git
-└── active development
-    ├── competition features
-    ├── internal documentation
-    ├── operational notes
-    └── future deployment configuration
+* FastAPI application structure
+* bearer-token API authentication
+* strict FAUST flag validation
+* configurable gameserver host, port, and timeout
+* FAUST TCP submission client
+* submission response parsing
+* encrypted flag storage
+* keyed flag fingerprints
+* local duplicate detection
+* persistent submission metadata
+* terminal and retryable submission states
+* retry queue
+* exponential retry backoff
+* due-only retry selection
+* atomic retry leases
+* expired lease recovery
+* unique per-claim fencing tokens
+* stale worker result protection
+* SQLite schema migration support
+* isolated pytest database fixtures
+* manual TCP, retry, concurrency, and fencing validation
+* 53 automated tests currently passing
 
-Public GitHub
-└── sanitized snapshot
-```
-
-Do not push private competition changes to `origin` unless that publication is intentional.
-
-Normal development pushes should target:
-
-```text
-ttz/main
-```
-
-The local `main` branch is configured to use the TTZ remote for normal pushes.
-
----
-
-## Current Status
-
-MOTH currently supports:
-
-* FastAPI HTTP API
-* Bearer-token API authentication
-* fail-closed authentication
-* constant-time token comparison
-* Pydantic input validation
-* FAUST flag-format validation
-* keyed duplicate detection
-* encrypted SQLite flag storage
-* AES-256-GCM flag encryption
-* HMAC-SHA256 fingerprints
-* HKDF-SHA256 key separation
-* asynchronous TCP submission
-* configurable submission backend
-* configurable timeout
-* connection failure handling
-* response timeout handling
-* retry-safe transient failures
-* terminal versus retryable result handling
-* local duplicate suppression
-* disposable test databases
-* automated unit and integration tests
-* manual local end-to-end verification
-
-Current automated test status:
-
-```text
-31 passed
-```
-
-Two dependency deprecation warnings currently originate from the FastAPI, Starlette, HTTPX, and AnyIO testing stack.
-
-They are not MOTH test failures.
+The next backend milestone is integrating the lease and fencing system directly into the retry worker.
 
 ---
 
-## Architecture
+# Why MOTH exists
+
+During an attack-defense CTF, multiple exploit scripts and operators may discover flags at the same time.
+
+Without a central relay, every exploit would need to know:
+
+* how to validate a flag
+* how to talk to the gameserver
+* how to handle timeouts
+* how to identify duplicates
+* how to retry failed submissions
+* how long to wait between retries
+* how to persist unfinished work
+* how to avoid two workers retrying the same flag
+* how to prevent stale workers from overwriting newer state
+
+MOTH centralizes all of that.
+
+Exploit code should ideally only need to know:
+
+```text
+I found a flag.
+Send it to MOTH.
+```
+
+MOTH handles the rest.
+
+---
+
+# Architecture
+
+## Current backend architecture
 
 ```mermaid
-flowchart LR
-    CLIENT[Operator or Exploit]
+flowchart TD
+    A[Exploit Scripts] --> D[MOTH API]
+    B[Manual Operators] --> D
+    C[Future Dashboard] --> D
 
-    MORI[MORI Auth Boundary]
-    API[MOTH FastAPI]
-    VALIDATE[Flag Validation]
-    DEDUP[Duplicate Check]
-    SUBMIT[TCP Submitter]
-    BACKEND[Submission Backend]
-    DB[(Encrypted SQLite)]
+    D --> E[Bearer Authentication]
+    E --> F[Flag Validation]
+    F --> G[Local Deduplication]
+    G --> H[Submission Logic]
 
-    CLIENT -->|Bearer Token| MORI
-    MORI -->|Authorized| API
-    MORI -->|Unauthorized| SWAT[Swat]
+    H --> I[FAUST Gameserver]
+    H --> J[(Encrypted SQLite State)]
 
-    API --> VALIDATE
-    VALIDATE --> DEDUP
-    DEDUP --> SUBMIT
-    SUBMIT --> BACKEND
-
-    BACKEND --> SUBMIT
-    SUBMIT --> API
-    API --> DB
+    J --> K[Retry Queue]
+    K --> L[Backoff Scheduler]
+    L --> M[Lease + Fencing Layer]
+    M --> H
 ```
+
+The core design rule is that submission behavior should live in one reusable internal service rather than being reimplemented by every API route, worker, or UI.
 
 ---
 
-## Request Flow
+## Planned full architecture
 
 ```mermaid
-sequenceDiagram
-    participant C as Client
-    participant M as MORI
-    participant API as MOTH
-    participant DB as SQLite
-    participant G as Submission Backend
+flowchart TD
+    A[Single Flag UI] --> E[Shared Submission Service]
+    B[Batch Submission UI] --> E
+    C[Exploit API] --> E
+    D[Future Integrations] --> E
 
-    C->>M: POST /api/flags + Bearer token
-    M->>M: Verify authentication
+    E --> F[Validation]
+    F --> G[Deduplication]
 
-    alt Invalid credentials
-        M-->>C: 401
-    else Authorized
-        M->>API: Allow request
-        API->>API: Validate FAUST flag
-        API->>DB: Check fingerprint
+    G --> H[Gameserver Client]
+    G --> I[(Encrypted Persistent State)]
 
-        alt Local duplicate
-            DB-->>API: Already known
-            API-->>C: LOCAL duplicate
-        else New flag
-            API->>G: Submit flag
-            G-->>API: Submission result
+    I --> J[Retry Scheduler]
+    J --> K[Lease + Fencing]
+    K --> H
 
-            alt Terminal result
-                API->>DB: Encrypt and store
-            else Retryable result
-                API->>API: Do not remember permanently
-            end
+    I --> L[Dashboard API]
+    L --> M[MOTH Operator Dashboard]
 
-            API-->>C: Submission response
-        end
-    end
+    M --> A
+    M --> B
 ```
+
+One moth brain.
+
+Many entrances.
 
 ---
 
-## MORI Authentication
+# API
 
-```text
-/•᷅‎‎•᷄\੭
-```
+## Authentication
 
-MORI owns the API security boundary.
-
-Clients authenticate using:
-
-```text
-Authorization: Bearer <MOTH_API_TOKEN>
-```
-
-Authentication happens before flag processing.
-
-### Missing credentials
-
-Returns:
-
-```text
-401 Unauthorized
-```
-
-with:
-
-```text
-MORI found no authorization at the nest entrance
-```
-
-### Malformed credentials
-
-Returns:
-
-```text
-401 Unauthorized
-```
-
-with:
-
-```text
-MORI swatted away malformed authorization
-```
-
-### Wrong token
-
-Returns:
-
-```text
-401 Unauthorized
-```
-
-with:
-
-```text
-MORI does not recognize this visitor
-```
-
-### Missing server-side authentication configuration
-
-If `MOTH_API_TOKEN` is not configured on the server, MORI fails closed.
-
-Returns:
-
-```text
-503 Service Unavailable
-```
-
-MORI does not pretend the nest is guarded when it is not.
-
----
-
-## Flag Validation
-
-Supported FAUST flag shape:
-
-```text
-FAUST_[A-Za-z0-9/+]{32}
-```
-
-Example valid flag shape:
-
-```text
-FAUST_AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA
-```
-
-Authenticated malformed flags are rejected before database or network submission.
+Protected endpoints use bearer authentication.
 
 Example:
 
-```text
-mof does not recognize this as a FAUST flag
+```http
+Authorization: Bearer <MOTH_API_TOKEN>
 ```
+
+API tokens and encryption keys must never be committed to Git.
+
+Local configuration belongs in `.env`.
 
 ---
 
-## Duplicate Detection
+## Current single-flag endpoint
 
-MOTH does not store plaintext flags for duplicate comparison.
-
-Instead:
-
-```mermaid
-flowchart LR
-    FLAG[Flag]
-    KEY[Derived Fingerprint Key]
-
-    FLAG --> HMAC[HMAC-SHA256]
-    KEY --> HMAC
-
-    HMAC --> FP[Fingerprint]
-    FP --> DB[(SQLite UNIQUE)]
+```http
+POST /api/flags
 ```
 
-The fingerprint is deterministic for the same flag and key.
-
-A local duplicate is stopped before another submission request is sent.
-
-Example response:
+Example request:
 
 ```json
 {
-  "status": "duplicate",
-  "code": "LOCAL",
-  "message": "mof has already seen this offering",
-  "remembered": true
+  "flag": "FAUST_...",
+  "service": "achat",
+  "source": "exploit-worker-3"
 }
 ```
 
----
+The endpoint currently handles:
 
-## Encrypted Storage
-
-Flags are encrypted before storage.
-
-Current design:
-
-```text
-MOTH_DB_KEY
-    ↓
-HKDF-SHA256
-    ├── encryption key
-    └── fingerprint key
-```
-
-Flag encryption:
-
-```text
-AES-256-GCM
-```
-
-Nonce:
-
-```text
-12 random bytes
-```
-
-Fingerprinting:
-
-```text
-HMAC-SHA256
-```
-
-SQLite currently stores:
-
-```text
-id
-flag_ciphertext
-flag_nonce
-flag_fingerprint
-```
-
-Plaintext flags are not intentionally stored.
-
-Automated testing verifies that submitted plaintext is absent from the raw database bytes.
+* authentication
+* whitespace cleanup
+* strict FAUST flag validation
+* local duplicate detection
+* gameserver submission
+* terminal result persistence
+* retryable result persistence
+* timeout handling
+* connection error handling
 
 ---
 
-## Secrets
+## Planned batch endpoint
 
-MOTH currently uses two primary secrets.
+A dedicated batch endpoint is planned:
 
-### `MOTH_DB_KEY`
-
-Used for:
-
-* encryption
-* fingerprint derivation
-
-This remains server-side.
-
-Clients must never receive it.
-
-### `MOTH_API_TOKEN`
-
-Used for:
-
-* client authentication
-
-This token may be shared with authorized team clients.
-
-It is independent of the database key.
-
-### Rules
-
-Never commit:
-
-```text
-.env
-MOTH_DB_KEY
-MOTH_API_TOKEN
-private SSH keys
-competition credentials
+```http
+POST /api/flags/batch
 ```
 
-Private Git is not a secret manager.
+Example:
 
-MORI will swat accordingly.
+```json
+{
+  "flags": [
+    "FAUST_...",
+    "FAUST_...",
+    "FAUST_..."
+  ],
+  "service": "achat",
+  "source": "exploit-worker-3"
+}
+```
+
+The batch endpoint should:
+
+* accept many flags at once
+* validate each item independently
+* deduplicate within the incoming batch
+* reuse the same internal submission service as single submissions
+* return per-item status
+* return an aggregate summary
+* avoid exposing unnecessary plaintext flag material
+* enforce sensible batch-size limits
+
+Planned response shape:
+
+```json
+{
+  "status": "processed",
+  "summary": {
+    "received": 47,
+    "accepted": 39,
+    "duplicate": 5,
+    "retryable": 2,
+    "invalid": 1
+  },
+  "results": []
+}
+```
+
+The goal is to make exploit integration intentionally boring.
+
+Example:
+
+```python
+requests.post(
+    "http://moth/api/flags/batch",
+    headers={
+        "Authorization": f"Bearer {TOKEN}",
+    },
+    json={
+        "flags": discovered_flags,
+        "service": "achat",
+        "source": "exploit-achat",
+    },
+)
+```
+
+Exploit scripts should not need to implement FAUST submission protocol handling or retry logic themselves.
 
 ---
 
-## Submission Backend
+# Persistent state
 
-Submission configuration is controlled through:
+MOTH stores submission state in SQLite.
 
-```text
-MOTH_SUBMISSION_HOST
-MOTH_SUBMISSION_PORT
-MOTH_SUBMISSION_TIMEOUT
-```
+Stored information currently includes:
 
-Local development defaults remain intentionally safe.
+* encrypted flag data
+* keyed flag fingerprint
+* submission state
+* response code
+* response message
+* service
+* source
+* creation timestamp
+* update timestamp
+* retry count
+* next retry timestamp
+* last attempt timestamp
+* lease owner
+* lease expiry
+* lease fencing token
 
-```text
-host:    127.0.0.1
-port:    6666
-timeout: 5.0 seconds
-```
+Flags are encrypted before being written to the database.
 
-Final competition deployment values must be stored outside Git.
+Fingerprints are used for efficient duplicate detection without using plaintext flags as database identifiers.
 
-### Competition configuration
+Application-level database encryption protects copied database contents from directly revealing stored flag plaintext.
 
-```text
-TODO: Final MOTH host
-TODO: Final submission backend host
-TODO: Final submission backend port
-TODO: Final network route
-TODO: Final startup method
-```
-
-Do not fill these values with guesses.
-
-Update them when the team deployment is actually decided.
+It does not protect against a fully compromised host or process with access to the active encryption key.
 
 ---
 
-## Submission Results
+# Submission states
 
-Terminal results currently include:
+MOTH currently distinguishes between two high-level states.
+
+## Terminal
+
+A terminal result does not need another submission attempt.
+
+Known terminal FAUST response codes currently include:
 
 ```text
 OK
@@ -433,91 +312,602 @@ OLD
 INV
 ```
 
-These cause the flag to be remembered locally.
+Terminal flags count as remembered for local duplicate detection.
 
-Retryable result:
+---
+
+## Retryable
+
+Retryable records represent unfinished work.
+
+Examples include:
 
 ```text
 ERR
+TIMEOUT
+CONNECTION_ERROR
+PROTOCOL_ERROR
+unknown non-terminal response codes
 ```
 
-does not cause permanent local memory.
-
-Unknown structurally valid response codes are treated conservatively and are not automatically considered terminal.
+Retryable flags remain available to the retry system.
 
 ---
 
-## Failure Handling
+# Retry system
 
-### Backend unavailable
+MOTH uses exponential backoff.
 
-MOTH returns:
+Current schedule:
+
+| Retry         |                 Delay |
+| ------------- | --------------------: |
+| 1             |             5 seconds |
+| 2             |            10 seconds |
+| 3             |            20 seconds |
+| 4             |            40 seconds |
+| 5             |            80 seconds |
+| 6             |           160 seconds |
+| Later retries | capped at 300 seconds |
+
+The retry worker only considers records whose `next_retry_at` timestamp has been reached.
+
+Calling the worker before a retry is due produces no gameserver traffic.
+
+---
+
+## Retry flow
+
+```mermaid
+flowchart TD
+    A[Submission Fails] --> B[Record Retryable State]
+    B --> C[Increment Retry Count]
+    C --> D[Calculate Backoff]
+    D --> E[Set next_retry_at]
+    E --> F{Retry Due?}
+
+    F -- No --> G[Do Nothing]
+    G --> F
+
+    F -- Yes --> H[Attempt Atomic Claim]
+    H --> I{Lease Acquired?}
+
+    I -- No --> J[Another Worker Owns It]
+    I -- Yes --> K[Submit to Gameserver]
+
+    K --> L{Result}
+    L -- Terminal --> M[Store Terminal State]
+    L -- Retryable --> B
+```
+
+---
+
+# Retry leases
+
+Multiple workers must not submit the same retry simultaneously.
+
+MOTH therefore supports atomic retry leases.
+
+A worker claims one due retry at a time.
+
+```mermaid
+sequenceDiagram
+    participant W1 as Worker A
+    participant DB as MOTH DB
+    participant W2 as Worker B
+
+    W1->>DB: BEGIN IMMEDIATE
+    W1->>DB: Claim one due retry
+    DB-->>W1: Lease granted
+    W1->>DB: COMMIT
+
+    W2->>DB: Attempt same claim
+    DB-->>W2: No due unleased record
+```
+
+Another worker cannot receive the same record while the lease remains active.
+
+If the first worker dies, the lease eventually expires and another worker may recover the record.
+
+---
+
+# Fencing tokens
+
+Worker identity alone is not sufficient for safe retry result handling.
+
+Consider this sequence:
+
+```mermaid
+sequenceDiagram
+    participant W1a as Worker A - Old Incarnation
+    participant DB as MOTH DB
+    participant W1b as Worker A - New Incarnation
+
+    W1a->>DB: Claim retry
+    DB-->>W1a: token AAA
+
+    Note over W1a,DB: Lease expires
+
+    W1b->>DB: Reclaim retry
+    DB-->>W1b: token BBB
+
+    W1a->>DB: Submit stale result with AAA
+    DB-->>W1a: Rejected
+
+    W1b->>DB: Submit current result with BBB
+    DB-->>W1b: Accepted
+```
+
+Every claim receives a unique random fencing token.
+
+Result writes require:
 
 ```text
-502 Bad Gateway
+worker identity
++
+claim token
++
+unexpired lease
 ```
 
-The flag is not remembered.
+This protects MOTH against delayed results from stale worker incarnations.
 
-A later retry remains possible.
+---
 
-### Backend connected but silent
+# Security model
 
-MOTH returns:
+MOTH currently provides several layers of protection.
+
+## API authentication
+
+Protected API routes require a bearer token.
+
+Invalid, malformed, or missing credentials are rejected before normal flag processing.
+
+---
+
+## Flag validation
+
+Only flags matching the expected FAUST format are accepted.
+
+Malformed input is rejected before submission.
+
+---
+
+## Database encryption
+
+Flags are encrypted using authenticated encryption before persistence.
+
+A separate keyed fingerprint is used for duplicate detection.
+
+Encryption and fingerprinting use independently derived keys.
+
+---
+
+## Secret handling
+
+The following must not be committed:
 
 ```text
-504 Gateway Timeout
+MOTH_DB_KEY
+MOTH_API_TOKEN
+competition credentials
+deployment-specific secrets
 ```
 
-The flag is not remembered.
-
-### Local duplicate
-
-The gameserver is not contacted again.
+Private Git is not a secret manager.
 
 ---
 
-## Manual Verification Completed
+## Transport security
 
-The following paths have been manually tested locally:
+Bearer authentication alone does not provide encrypted transport.
 
-* successful authenticated flag submission
-* unauthorized request rejection
-* wrong-token rejection
-* authenticated malformed flag rejection
-* local duplicate suppression
-* missing backend resulting in `502`
-* retry after `502`
-* silent backend resulting in `504`
-* retry after `504`
-* complete HTTP to TCP to encrypted-storage path
+Competition deployment must use an appropriately trusted transport layer, isolated network, VPN, TLS, or another suitable deployment design.
+
+Final transport architecture is still to be decided.
 
 ---
 
-## Development
+# MORI
 
-Create the virtual environment:
+MORI owns security.
 
-```powershell
-python -m venv .venv
+Current responsibilities include:
+
+* rejecting missing authorization
+* rejecting malformed authorization
+* rejecting unknown API tokens
+* guarding retry claims
+* enforcing lease ownership
+* rejecting stale fencing tokens
+* preventing concurrent custody disputes
+* generally having violence in her heart
+
+---
+
+# Mof
+
+Mof owns transport.
+
+Current responsibilities include:
+
+* carrying flags
+* talking TCP
+* finding the gameserver
+* waiting for responses
+* remembering unfinished work
+* retrying responsibly
+* obeying backoff
+* not repeatedly headbutting the lämp during outages
+
+---
+
+# Planned operator dashboard
+
+MOTH will receive a proper web frontend.
+
+The dashboard is intended to be a practical competition control surface rather than decoration layered on top of the API.
+
+Visual direction:
+
+* dark purple
+* lavender
+* Mof
+* MORI
+* moth motifs
+* operational clarity first
+* unnecessary amounts of personality second
+
+---
+
+## Planned dashboard layout
+
+```mermaid
+flowchart TD
+    A[MOTH Dashboard] --> B[System Status]
+    A --> C[Submission Statistics]
+    A --> D[Retry Queue Health]
+    A --> E[Worker Health]
+    A --> F[Recent Activity]
+    A --> G[Single Flag Submission]
+    A --> H[Batch Flag Submission]
+    A --> I[Gameserver Health]
 ```
 
-Activate:
+---
 
-```powershell
-.\.venv\Scripts\Activate.ps1
+# Planned dashboard statistics
+
+The dashboard should eventually expose operational data such as:
+
+* total flags received
+* accepted flags
+* local duplicates
+* gameserver duplicates
+* own flags
+* old flags
+* invalid flags
+* retryable flags
+* active leases
+* retry queue depth
+* oldest pending retry
+* current retry distribution
+* flags per minute
+* success rate
+* gameserver connectivity
+* submission activity over time
+* per-service submission counts
+* per-source submission counts
+* recent result feed
+* worker health
+* MORI rejection count
+
+Plaintext flag values should not be sprayed across dashboards, logs, or telemetry.
+
+---
+
+# Planned manual submission UI
+
+The dashboard will include a simple single-flag form.
+
+Planned fields:
+
+```text
+flag
+service
+source
 ```
+
+The goal is fast operator use during competition.
+
+A human who discovers one flag should be able to paste it and submit it with almost no friction.
+
+---
+
+# Planned multi-flag submission UI
+
+A second interface will accept many flags at once.
+
+Example input:
+
+```text
+FAUST_...
+FAUST_...
+FAUST_...
+FAUST_...
+```
+
+The frontend should:
+
+* parse one flag per line
+* identify malformed entries
+* deduplicate pasted data before submission
+* display a clear aggregate result
+* display useful per-item failures
+* avoid unnecessarily rendering sensitive flag material
+* remain usable when pasting large batches
+
+Example summary:
+
+```text
+47 received
+39 accepted
+5 duplicates
+2 retrying
+1 invalid
+```
+
+---
+
+# Planned frontend state
+
+Mof should visually react to MOTH state.
+
+Possible states:
+
+| System state       | Mof behavior             |
+| ------------------ | ------------------------ |
+| Idle               | resting near the lämp    |
+| Submitting         | flying                   |
+| Connection failure | bonked into the lämp     |
+| Large retry queue  | distressed moth activity |
+| Healthy system     | peaceful moth operations |
+
+MORI may appear around security, access control, lease, and rejection information.
+
+MORI should remain judgmental.
+
+---
+
+# Planned operator controls
+
+The first dashboard version should primarily be read-only outside normal flag submission.
+
+Future privileged controls may include:
+
+* retry now
+* pause retry worker
+* resume retry worker
+* inspect queue
+* drain queue
+* worker status
+* gameserver connectivity test
+
+Administrative controls should require stronger authorization than ordinary dashboard viewing.
+
+---
+
+# Development roadmap
+
+```mermaid
+flowchart LR
+    A[Phase 1<br/>Core Relay]
+    B[Phase 2<br/>Reliable Retry Engine]
+    C[Phase 3<br/>Automatic Scheduler]
+    D[Phase 4<br/>Submission Service Refactor]
+    E[Phase 5<br/>Batch API]
+    F[Phase 6<br/>Dashboard API]
+    G[Phase 7<br/>MOTH Frontend]
+    H[Phase 8<br/>Competition Hardening]
+
+    A --> B --> C --> D --> E --> F --> G --> H
+```
+
+---
+
+## Phase 1: Core relay
+
+Status: mostly complete.
+
+Includes:
+
+* FastAPI
+* authentication
+* flag validation
+* gameserver communication
+* encrypted persistence
+* duplicate detection
+* response state handling
+
+---
+
+## Phase 2: Reliable retry engine
+
+Status: active.
+
+Completed:
+
+* retry queue
+* exponential backoff
+* due-time filtering
+* atomic claims
+* lease recovery
+* fencing tokens
+* stale worker rejection
+
+Next:
+
+* integrate leases into the real retry worker
+* process one atomic claim at a time
+* test concurrent workers end-to-end
+* decide worker identity lifecycle
+* graceful interruption handling
+
+---
+
+## Phase 3: Automatic retry scheduling
+
+Planned.
+
+Includes:
+
+* application lifecycle integration
+* controlled periodic worker execution
+* graceful startup
+* graceful shutdown
+* no uncontrolled infinite retry loops
+* observable worker health
+
+---
+
+## Phase 4: Submission service refactor
+
+Planned.
+
+Move submission orchestration into one reusable internal service.
+
+Consumers:
+
+```mermaid
+flowchart LR
+    A[Single API Endpoint] --> E[Submission Service]
+    B[Batch API Endpoint] --> E
+    C[Manual UI] --> E
+    D[Retry Worker] --> E
+    F[Future Integrations] --> E
+```
+
+This avoids business logic divergence between API routes, workers, and UI code.
+
+---
+
+## Phase 5: Batch submission API
+
+Planned.
+
+Includes:
+
+* `/api/flags/batch`
+* per-item validation
+* in-batch deduplication
+* aggregate result summaries
+* bounded batch sizes
+* sensible concurrency limits
+
+---
+
+## Phase 6: Dashboard API
+
+Planned.
+
+Expose safe aggregated operational information such as:
+
+* submission counts
+* result counts
+* retry queue state
+* active leases
+* worker state
+* gameserver health
+* per-service statistics
+* timeline data
+
+Dashboard endpoints must avoid leaking plaintext flags or secrets.
+
+---
+
+## Phase 7: MOTH frontend
+
+Planned.
+
+Includes:
+
+* Mof
+* MORI
+* dark purple and lavender visual system
+* system status
+* statistics dashboard
+* recent activity
+* single flag submission
+* multi-flag submission
+* retry health
+* worker health
+
+---
+
+## Phase 8: Competition hardening
+
+Required before FAUST deployment.
+
+Includes:
+
+* reverify official FAUST submission protocol
+* final gameserver configuration
+* deployment network design
+* API transport protection
+* secret distribution strategy
+* load testing
+* multi-worker testing
+* crash recovery testing
+* malformed response testing
+* slow gameserver testing
+* gameserver outage rehearsal
+* database backup strategy
+* logging review
+* telemetry review
+* ensure flags never leak through logs
+* full end-to-end competition rehearsal
+
+---
+
+# Testing philosophy
+
+MOTH uses both automated and manual testing.
+
+Current automated suite:
+
+```text
+53 passing tests
+```
+
+Manual testing has included:
+
+* real local TCP submission
+* gameserver refusal
+* communication timeout
+* fake server delay
+* retryable to terminal transitions
+* encrypted persistence inspection
+* retry queue operation
+* exponential backoff
+* due-only retry behavior
+* simultaneous retry claims
+* lease expiry recovery
+* stale worker result rejection
+* same-worker-ID reincarnation fencing
+
+Manual testing is intentionally retained for stateful and concurrency-sensitive features even when automated regression tests exist.
+
+---
+
+# Local development
+
+Create and activate a virtual environment.
 
 Install dependencies:
 
 ```powershell
 pip install -r requirements-dev.txt
-```
-
-Run MOTH:
-
-```powershell
-uvicorn app.main:app --reload
 ```
 
 Run tests:
@@ -526,242 +916,80 @@ Run tests:
 pytest -v
 ```
 
----
-
-## Git Workflow
-
-Primary development remote:
-
-```text
-ttz
-```
-
-Public snapshot remote:
-
-```text
-origin
-```
-
-Normal development:
+Run MOTH:
 
 ```powershell
-git status
-git add .
-git commit -m "mof learned something questionable"
-git push
-```
-
-`git push` should target `ttz/main`.
-
-Do not push to:
-
-```powershell
-git push origin main
-```
-
-unless publishing the private development state is intentional.
-
----
-
-## Commit Signing
-
-New commits in this repository are configured for SSH signing.
-
-Configuration:
-
-```text
-gpg.format = ssh
-commit.gpgsign = true
-```
-
-Signing key:
-
-```text
-~/.ssh/id_ed25519_ttz_signing.pub
-```
-
-The private key must never be committed or shared.
-
-Future commits should appear as verified in TTZ GitLab when the signing key and commit email are correctly associated with the account.
-
----
-
-## Project Structure
-
-```text
-MOTH/
-├── README.md
-├── docs/
-│   └── USAGE.md
-├── app/
-│   ├── __init__.py
-│   ├── main.py
-│   ├── api/
-│   │   ├── __init__.py
-│   │   ├── health.py
-│   │   └── flags.py
-│   ├── core/
-│   │   ├── __init__.py
-│   │   ├── auth.py
-│   │   ├── config.py
-│   │   ├── crypto.py
-│   │   └── submitter.py
-│   └── db/
-│       ├── __init__.py
-│       └── database.py
-├── tests/
-│   ├── conftest.py
-│   ├── test_auth.py
-│   ├── test_config.py
-│   ├── test_flags.py
-│   └── test_submitter.py
-├── .gitignore
-├── pytest.ini
-├── requirements.txt
-└── requirements-dev.txt
+uvicorn app.main:app --reload
 ```
 
 ---
 
-## Deployment Security
+# Configuration
 
-Bearer authentication does not provide transport encryption.
-
-For competition use, MOTH must run over appropriately trusted or protected transport.
-
-Possible approaches include:
-
-* protected team network
-* VPN
-* TLS termination
-* local service boundaries
-
-Final deployment design is still pending.
-
-Do not expose the API directly over an untrusted plaintext network merely because MORI checks tokens.
+Typical local `.env` configuration includes:
 
 ```text
-/•᷅‎‎•᷄\੭
-
-MORI has claws.
-MORI does not provide TLS.
+MOTH_DB_KEY=
+MOTH_API_TOKEN=
+MOTH_SUBMISSION_HOST=
+MOTH_SUBMISSION_PORT=
+MOTH_SUBMISSION_TIMEOUT=
 ```
+
+Never commit the real values.
 
 ---
 
-## Planned Work
+# Repository workflow
+
+This repository is the active private development version of MOTH.
+
+Development commits are signed.
+
+The public GitHub repository should remain a sanitized snapshot and should not automatically receive active competition development or sensitive implementation details.
+
+Normal private development pushes should target the TTZ remote.
+
+---
+
+# Project philosophy
+
+MOTH should be:
+
+* simple to use
+* difficult to misuse
+* boring to integrate
+* safe under failure
+* observable under pressure
+
+The backend should be reliable enough that exploit authors do not need to think about submission infrastructure.
+
+The frontend should be clear enough that an operator can understand what is happening at a glance.
+
+The implementation can still contain an unreasonable amount of moth.
+
+---
+
+# Final goal
 
 ```mermaid
-flowchart TD
-    A[Encrypted Storage ✓]
-    B[Duplicate Detection ✓]
-    C[TCP Submission ✓]
-    D[Failure Handling ✓]
-    E[API Integration ✓]
-    F[Integration Testing ✓]
-    G[Flag Validation ✓]
-    H[API Authentication ✓]
-    I[Persistent Submission State]
-    J[Retry Handling]
-    K[Operational Tooling]
-
-    A --> B
-    B --> C
-    C --> D
-    D --> E
-    E --> F
-    F --> G
-    G --> H
-    H --> I
-    I --> J
-    J --> K
+flowchart LR
+    A[Exploit Finds Flags] --> B[Send to MOTH]
+    B --> C[Validation]
+    C --> D[Deduplication]
+    D --> E[Submission]
+    E --> F[(Persistent State)]
+    F --> G[Retry if Needed]
+    G --> E
+    F --> H[Dashboard + Statistics]
 ```
 
-Near-term development:
+During competition, the exploit author should only care about the first two boxes.
 
-* persistent submission state
-* timestamps
-* response metadata
-* `service` metadata persistence
-* `source` metadata persistence
-* concurrency-safe handling
-* retry queue design
-* structured logging
+MOTH handles the rest.
 
----
+Mof carries the flags.
 
-## Nest Residents
+MORI guards the nest.
 
-```text
-ཐི༏ཋྀ
-ཐིཋྀ
-࿔‧ ֶָ֢˚˖𐦍˖˚ֶָ֢ ‧࿔
-𐔌՞. .՞𐦯
-⁺‧₊˚ ཐི⋆♱⋆ཋྀ ˚₊‧⁺
-ʚïɞ
-ᖭི༏ᖫྀ
-
-/•᷅‎‎•᷄\੭
-```
-
-Mof carries flags.
-
-MORI checks visitors.
-
-Classification of the other residents remains disputed.
-
----
-
-## Development Log
-
-```text
-mof built a tiny nest
-mof discovered fastapi
-mof found the api
-mori started watching the nest
-mof learned what a flag looks like
-mof refuses suspiciously empty offerings
-mof found a memory box
-mori taught mof to keep secrets
-mof remembers without telling secrets
-mof remembers repeat visitors
-mof survived scientific poking
-mof got a disposable science nest
-mori checked under the floorboards
-mof learned gameserver dialect
-mof learned to speak tcp
-mof learned when to stop staring at the lämp
-mof learned the difference between silence and absence
-mof learned where the lämp lives
-mof learned to check the nest first
-mof carried her first flag through the whole nest
-mof learned what a real flag looks like
-mori started guarding the nest
-mori wrote the visitor guide
-```
-
-More incidents are expected.
-
----
-
-## Why MOTH?
-
-Because every attack-defense team eventually creates some cursed little script that forwards flags.
-
-This one gets:
-
-* tests
-* encryption
-* authentication
-* signed commits
-* documentation
-* a moth
-* a cat with anger-management issues
-
-```text
-⁺‧₊˚ ཐི⋆♱⋆ཋྀ ˚₊‧⁺
-
-      lämp acquired
-
-/•᷅‎‎•᷄\੭
-```
+MORI says hi.
