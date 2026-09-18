@@ -1,0 +1,260 @@
+.activity-terminal {
+  position: relative;
+  overflow: hidden;
+
+  border: 1px solid rgba(157, 77, 255, 0.56);
+
+  background:
+    linear-gradient(
+      rgba(157, 77, 255, 0.03) 1px,
+      transparent 1px
+    ),
+    linear-gradient(
+      90deg,
+      rgba(157, 77, 255, 0.022) 1px,
+      transparent 1px
+    ),
+    rgba(3, 1, 7, 0.96);
+
+  background-size:
+    26px 26px,
+    26px 26px,
+    cover;
+
+  box-shadow:
+    7px 7px 0 rgba(157, 77, 255, 0.15),
+    inset 0 0 0 1px rgba(244, 240, 255, 0.035);
+}
+
+/*
+ * Portfolio-style CRT scanlines inside the terminal itself.
+ */
+.activity-terminal::before {
+  position: absolute;
+  inset: 0;
+  z-index: 0;
+
+  pointer-events: none;
+
+  background:
+    repeating-linear-gradient(
+      0deg,
+      rgba(244, 240, 255, 0.035) 0,
+      rgba(244, 240, 255, 0.035) 1px,
+      transparent 1px,
+      transparent 4px
+    );
+
+  content: "";
+  opacity: 0.32;
+}
+
+.activity-terminal__chrome {
+  position: relative;
+  z-index: 1;
+
+  display: grid;
+  grid-template-columns:
+    minmax(0, 1fr)
+    auto
+    auto;
+
+  gap: 0.85rem;
+  align-items: center;
+
+  border-bottom:
+    1px solid rgba(157, 77, 255, 0.48);
+
+  padding: 0.78rem 0.95rem;
+
+  color: rgba(244, 240, 255, 0.78);
+
+  font-family: var(--font-mono);
+  font-size: 0.78rem;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+
+  background: rgba(7, 3, 12, 0.92);
+}
+
+.activity-terminal__chrome p {
+  min-width: 0;
+  margin: 0;
+
+  overflow: hidden;
+
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.activity-terminal__status {
+  color: var(--color-purple-soft);
+  white-space: nowrap;
+}
+
+.activity-terminal__dots {
+  display: flex;
+  gap: 0.34rem;
+
+  justify-self: end;
+}
+
+.activity-terminal__dots span {
+  width: 0.48rem;
+  height: 0.48rem;
+
+  border:
+    1px solid rgba(157, 77, 255, 0.78);
+
+  background:
+    rgba(157, 77, 255, 0.13);
+}
+
+.activity-terminal__screen {
+  position: relative;
+  z-index: 1;
+
+  min-height: 20rem;
+  max-height: 34rem;
+
+  overflow-y: auto;
+
+  padding:
+    clamp(1rem, 2vw, 1.35rem);
+
+  scrollbar-color:
+    rgba(157, 77, 255, 0.58)
+    rgba(7, 3, 12, 0.8);
+}
+
+.activity-terminal__screen p {
+  margin: 0;
+
+  color: rgba(244, 240, 255, 0.78);
+
+  font-family: var(--font-mono);
+  font-size:
+    clamp(0.82rem, 1.2vw, 0.96rem);
+
+  line-height: 1.65;
+
+  overflow-wrap: anywhere;
+}
+
+.activity-terminal__system {
+  color:
+    rgba(189, 169, 230, 0.78)
+    !important;
+}
+
+.activity-terminal__system span {
+  color:
+    rgba(157, 77, 255, 0.9);
+}
+
+.activity-terminal__command {
+  margin-top: 0.9rem !important;
+
+  color: var(--color-text) !important;
+}
+
+.activity-terminal__command span,
+.activity-terminal__line > span:first-child,
+.activity-terminal__prompt span {
+  color: var(--color-purple-soft);
+  font-weight: 800;
+}
+
+.activity-terminal__line {
+  margin-top: 0.35rem !important;
+}
+
+.activity-terminal__line time {
+  color:
+    rgba(189, 169, 230, 0.72);
+}
+
+.activity-terminal__prompt {
+  margin-top: 1rem !important;
+
+  color: var(--color-text) !important;
+}
+
+/*
+ * Tiny idle block cursor like the portfolio workstation.
+ */
+.activity-terminal__screen::after {
+  position: absolute;
+
+  right: 1.1rem;
+  bottom: 0.85rem;
+
+  width: 0.45rem;
+  height: 0.9rem;
+
+  pointer-events: none;
+
+  background:
+    rgba(244, 240, 255, 0.72);
+
+  content: "";
+
+  opacity: 0.25;
+
+  animation:
+    activity-terminal-idle-cursor
+    1.25s
+    steps(1, end)
+    infinite;
+}
+
+.activity-terminal__screen::-webkit-scrollbar {
+  width: 0.5rem;
+}
+
+.activity-terminal__screen::-webkit-scrollbar-track {
+  background:
+    rgba(7, 3, 12, 0.8);
+}
+
+.activity-terminal__screen::-webkit-scrollbar-thumb {
+  border:
+    1px solid rgba(157, 77, 255, 0.46);
+
+  background:
+    rgba(157, 77, 255, 0.24);
+}
+
+@keyframes activity-terminal-idle-cursor {
+  0%,
+  48% {
+    opacity: 0.25;
+  }
+
+  49%,
+  100% {
+    opacity: 0;
+  }
+}
+
+@media (max-width: 680px) {
+  .activity-terminal__chrome {
+    grid-template-columns:
+      minmax(0, 1fr)
+      auto;
+  }
+
+  .activity-terminal__status {
+    display: none;
+  }
+
+  .activity-terminal__dots {
+    grid-column: 2;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .activity-terminal__screen::after {
+    animation: none;
+  }
+}

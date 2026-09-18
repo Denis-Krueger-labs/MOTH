@@ -1,0 +1,1339 @@
+:root {
+  color-scheme: dark;
+
+  --color-bg: #020006;
+  --color-bg-soft: #050209;
+  --color-panel: #0b0610;
+  --color-panel-strong: #13091c;
+
+  --color-text: #f4f0ff;
+  --color-muted: #bda9e6;
+  --color-muted-strong: #c9c2d6;
+
+  --color-purple: #9d4dff;
+  --color-purple-soft: #c08cff;
+  --color-purple-deep: #4a147a;
+
+  --color-accent: #f4f0ff;
+  --color-accent-soft: #c9c2d6;
+
+  --color-line: rgba(157, 77, 255, 0.42);
+  --color-line-strong: rgba(157, 77, 255, 0.72);
+  --color-shadow: rgba(157, 77, 255, 0.28);
+
+  --font-body:
+    Inter,
+    ui-sans-serif,
+    system-ui,
+    -apple-system,
+    BlinkMacSystemFont,
+    "Segoe UI",
+    sans-serif;
+
+  --font-mono:
+    "JetBrains Mono",
+    "Fira Code",
+    Consolas,
+    "Liberation Mono",
+    monospace;
+
+  --font-moth:
+    "Times New Roman",
+    "Noto Serif Tibetan",
+    "Noto Serif",
+    serif;
+
+  --container: 1120px;
+  --space-page: clamp(1rem, 4vw, 2.5rem);
+
+  --border-thin: 1px solid var(--color-line);
+  --shadow-brutal: 9px 9px 0 rgba(157, 77, 255, 0.16);
+
+  --transition: 160ms ease;
+
+  color: var(--color-text);
+  font-family: var(--font-body);
+
+  background: var(--color-bg);
+
+  font-synthesis: none;
+  text-rendering: geometricPrecision;
+
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html {
+  min-width: 320px;
+  min-height: 100%;
+
+  background: var(--color-bg);
+}
+
+body {
+  min-width: 320px;
+  min-height: 100vh;
+
+  margin: 0;
+
+  color: var(--color-text);
+
+  font-family: var(--font-body);
+
+  background:
+    radial-gradient(
+      circle at 10% 6%,
+      rgba(157, 77, 255, 0.28),
+      transparent 23rem
+    ),
+    radial-gradient(
+      circle at 88% 18%,
+      rgba(192, 140, 255, 0.14),
+      transparent 27rem
+    ),
+    radial-gradient(
+      circle at 18% 72%,
+      rgba(157, 77, 255, 0.13),
+      transparent 28rem
+    ),
+    radial-gradient(
+      circle at 74% 62%,
+      rgba(157, 77, 255, 0.09),
+      transparent 30rem
+    ),
+    linear-gradient(
+      180deg,
+      #020006 0%,
+      #05010a 46%,
+      #020006 100%
+    );
+
+  text-rendering: geometricPrecision;
+}
+
+/* Soft global grid */
+
+body::before {
+  position: fixed;
+  inset: 0;
+
+  z-index: -2;
+
+  pointer-events: none;
+
+  content: "";
+
+  background:
+    repeating-linear-gradient(
+      0deg,
+      rgba(244, 240, 255, 0.026) 0 1px,
+      transparent 1px 56px
+    ),
+    repeating-linear-gradient(
+      90deg,
+      rgba(157, 77, 255, 0.034) 0 1px,
+      transparent 1px 56px
+    ),
+    radial-gradient(
+      ellipse at 24% 26%,
+      rgba(157, 77, 255, 0.095),
+      transparent 34rem
+    ),
+    radial-gradient(
+      ellipse at 80% 74%,
+      rgba(192, 140, 255, 0.065),
+      transparent 36rem
+    );
+
+  background-size:
+    56px 56px,
+    56px 56px,
+    cover,
+    cover;
+
+  opacity: 0.82;
+
+  mask-image:
+    linear-gradient(
+      to bottom,
+      rgba(0, 0, 0, 0.9),
+      rgba(0, 0, 0, 0.72) 82%,
+      rgba(0, 0, 0, 0.36)
+    );
+
+  animation:
+    global-grid-breathe
+    28s
+    ease-in-out
+    infinite
+    alternate;
+}
+
+/* Faint CRT / edge atmosphere */
+
+body::after {
+  position: fixed;
+  inset: 0;
+
+  z-index: -1;
+
+  pointer-events: none;
+
+  content: "";
+
+  background:
+    radial-gradient(
+      circle at 5% 18%,
+      rgba(157, 77, 255, 0.12),
+      transparent 18rem
+    ),
+    radial-gradient(
+      circle at 95% 42%,
+      rgba(157, 77, 255, 0.075),
+      transparent 20rem
+    ),
+    repeating-linear-gradient(
+      0deg,
+      rgba(255, 255, 255, 0.026) 0,
+      rgba(255, 255, 255, 0.026) 1px,
+      transparent 1px,
+      transparent 7px
+    ),
+    linear-gradient(
+      90deg,
+      rgba(2, 0, 6, 0.7),
+      transparent 18%,
+      transparent 82%,
+      rgba(2, 0, 6, 0.64)
+    );
+
+  opacity: 0.48;
+}
+
+button,
+input,
+textarea,
+select {
+  font: inherit;
+}
+
+button {
+  cursor: pointer;
+}
+
+a {
+  color: inherit;
+  text-decoration: none;
+}
+
+::selection {
+  color: var(--color-bg);
+
+  background:
+    var(--color-purple-soft);
+}
+
+#root {
+  min-height: 100vh;
+}
+
+/* =========================================================
+   MOTH SHELL
+   ========================================================= */
+
+.moth-shell {
+  position: relative;
+
+  isolation: isolate;
+
+  min-height: 100vh;
+
+  overflow-x: clip;
+}
+
+/*
+ * Ghost layer.
+ *
+ * This is the actual MOTH graffiti texture:
+ * Mofs, MORI, fake logs, retry lore, terminal debris.
+ */
+
+.moth-shell::before {
+  position: fixed;
+  inset: 0;
+
+  z-index: 0;
+
+  min-height: 100vh;
+
+  pointer-events: none;
+
+  content: "";
+
+  background-image:
+    url("/moth-ambient.svg");
+
+  background-repeat: repeat;
+
+  background-size:
+    min(1480px, 104vw)
+    auto;
+
+  background-position:
+    50% 0;
+
+  opacity: 0.36;
+
+  mix-blend-mode: screen;
+
+  filter:
+    brightness(1.2)
+    saturate(1.08);
+
+  mask-image:
+    linear-gradient(
+      to bottom,
+      transparent 0,
+      rgba(0, 0, 0, 0.52) 6rem,
+      rgba(0, 0, 0, 0.76) 22rem,
+      rgba(0, 0, 0, 0.72) calc(100% - 16rem),
+      rgba(0, 0, 0, 0.32) 100%
+    );
+
+  -webkit-mask-image:
+    linear-gradient(
+      to bottom,
+      transparent 0,
+      rgba(0, 0, 0, 0.52) 6rem,
+      rgba(0, 0, 0, 0.76) 22rem,
+      rgba(0, 0, 0, 0.72) calc(100% - 16rem),
+      rgba(0, 0, 0, 0.32) 100%
+    );
+
+  animation:
+    moth-background-drift
+    26s
+    linear
+    infinite;
+
+  will-change:
+    background-position,
+    opacity;
+}
+
+/*
+ * Very light scanline layer.
+ * This stays above everything visually but cannot intercept input.
+ */
+
+.moth-shell::after {
+  position: fixed;
+  inset: 0;
+
+  z-index: 20;
+
+  pointer-events: none;
+
+  content: "";
+
+  background:
+    repeating-linear-gradient(
+      0deg,
+      rgba(244, 240, 255, 0.018) 0,
+      rgba(244, 240, 255, 0.018) 1px,
+      transparent 1px,
+      transparent 7px
+    ),
+    radial-gradient(
+      ellipse at center,
+      transparent 62%,
+      rgba(2, 0, 6, 0.28) 100%
+    );
+
+  opacity: 0.09;
+
+  mix-blend-mode: screen;
+}
+
+.moth-shell > * {
+  position: relative;
+
+  z-index: 2;
+}
+
+/* =========================================================
+   MAIN PAGE
+   ========================================================= */
+
+.page {
+  width:
+    min(
+      var(--container),
+      calc(100% - (var(--space-page) * 2))
+    );
+
+  margin: 0 auto;
+
+  padding:
+    clamp(3rem, 7vw, 5rem)
+    0
+    clamp(4rem, 8vw, 7rem);
+}
+
+/* =========================================================
+   HERO
+   ========================================================= */
+
+.hero {
+  position: relative;
+
+  display: block;
+
+  padding:
+    clamp(2rem, 5vw, 4rem)
+    0
+    clamp(3rem, 7vw, 5rem);
+}
+
+.hero__eyebrow {
+  display: block;
+
+  width: auto;
+
+  margin: 0 0 0.9rem;
+
+  padding: 0;
+
+  border: 0;
+  border-radius: 0;
+
+  color:
+    var(--color-purple-soft);
+
+  font-family:
+    var(--font-mono);
+
+  font-size: 0.76rem;
+  font-weight: 700;
+
+  letter-spacing: 0.08em;
+
+  text-transform: uppercase;
+
+  background: transparent;
+}
+
+.hero__eyebrow::before {
+  color: var(--color-accent);
+
+  content: "> ";
+}
+
+.hero__title {
+  max-width: 10ch;
+
+  margin: 0;
+
+  color: transparent;
+
+  font-size:
+    clamp(
+      4.8rem,
+      12vw,
+      9rem
+    );
+
+  font-weight: 900;
+
+  line-height: 0.82;
+
+  letter-spacing: -0.055em;
+
+  text-transform: uppercase;
+
+  -webkit-text-stroke:
+    clamp(1px, 0.16vw, 2px)
+    var(--color-text);
+
+  text-shadow:
+    0 0 30px
+    rgba(157, 77, 255, 0.28);
+}
+
+.hero__title-accent {
+  color: transparent;
+
+  -webkit-text-stroke:
+    clamp(1px, 0.16vw, 2px)
+    var(--color-purple-soft);
+
+  text-shadow:
+    0 0 28px
+    rgba(157, 77, 255, 0.38);
+}
+
+.hero__text {
+  max-width: 42rem;
+
+  margin:
+    1.5rem
+    0
+    0;
+
+  color:
+    var(--color-muted);
+
+  font-size:
+    clamp(
+      0.98rem,
+      1.8vw,
+      1.12rem
+    );
+
+  line-height: 1.7;
+}
+
+/* =========================================================
+   SECTIONS
+   ========================================================= */
+
+.section {
+  position: relative;
+
+  margin-top:
+    clamp(
+      2rem,
+      5vw,
+      3.5rem
+    );
+}
+
+.section + .section {
+  margin-top:
+    clamp(
+      1.5rem,
+      4vw,
+      2.5rem
+    );
+}
+
+.section-title {
+  display: flex;
+
+  gap: 0.75rem;
+
+  align-items: center;
+
+  margin:
+    0
+    0
+    1rem;
+
+  color:
+    var(--color-text);
+
+  font-family:
+    var(--font-mono);
+
+  font-size: 0.78rem;
+  font-weight: 800;
+
+  letter-spacing: 0.08em;
+
+  text-transform: uppercase;
+}
+
+.section-title::before {
+  color:
+    var(--color-purple-soft);
+
+  content: "$";
+}
+
+.section-title::after {
+  display: block;
+
+  height: 1px;
+
+  flex: 1 1 auto;
+
+  background:
+    linear-gradient(
+      90deg,
+      rgba(157, 77, 255, 0.42),
+      transparent
+    );
+
+  content: "";
+}
+
+/* =========================================================
+   GRID
+   ========================================================= */
+
+.grid {
+  display: grid;
+
+  gap: 1rem;
+}
+
+.grid--cards {
+  grid-template-columns:
+    minmax(0, 1.1fr)
+    minmax(18rem, 0.9fr);
+}
+
+.stat-grid {
+  display: grid;
+
+  grid-template-columns:
+    repeat(4, minmax(0, 1fr));
+
+  gap: 0.75rem;
+}
+
+/* =========================================================
+   STATUS CARDS
+   ========================================================= */
+
+.stat-card {
+  position: relative;
+
+  overflow: hidden;
+
+  min-width: 0;
+
+  border:
+    1px solid
+    rgba(157, 77, 255, 0.42);
+
+  border-radius: 0;
+
+  padding:
+    1rem;
+
+  background:
+    linear-gradient(
+      90deg,
+      rgba(157, 77, 255, 0.09),
+      transparent 5rem
+    ),
+    rgba(5, 2, 9, 0.94);
+
+  box-shadow:
+    inset
+      0 0 18px
+      rgba(157, 77, 255, 0.04),
+    4px 4px 0
+      rgba(157, 77, 255, 0.09);
+
+  transition:
+    transform var(--transition),
+    border-color var(--transition),
+    background var(--transition),
+    box-shadow var(--transition);
+}
+
+.stat-card::before {
+  position: absolute;
+
+  top: 0.45rem;
+  right: 0.45rem;
+
+  width: 0.72rem;
+  height: 0.72rem;
+
+  border-top:
+    1px solid
+    var(--color-line-strong);
+
+  border-right:
+    1px solid
+    var(--color-line-strong);
+
+  pointer-events: none;
+
+  content: "";
+}
+
+.stat-card:hover {
+  transform:
+    translateY(-2px);
+
+  border-color:
+    var(--color-purple-soft);
+
+  background:
+    linear-gradient(
+      90deg,
+      rgba(157, 77, 255, 0.14),
+      transparent 5rem
+    ),
+    rgba(8, 3, 13, 0.97);
+
+  box-shadow:
+    0 0 18px
+      rgba(157, 77, 255, 0.12),
+    5px 5px 0
+      rgba(157, 77, 255, 0.15);
+}
+
+.stat-card__label {
+  display: block;
+
+  margin: 0;
+
+  color:
+    rgba(189, 169, 230, 0.72);
+
+  font-family:
+    var(--font-mono);
+
+  font-size: 0.61rem;
+
+  letter-spacing: 0.09em;
+
+  text-transform: uppercase;
+}
+
+.stat-card__value {
+  display: block;
+
+  margin-top: 0.8rem;
+
+  color:
+    var(--color-text);
+
+  font-family:
+    var(--font-body);
+
+  font-size:
+    clamp(
+      1.4rem,
+      2.6vw,
+      2rem
+    );
+
+  font-weight: 800;
+
+  line-height: 1;
+}
+
+/*
+ * The fourth system status card contains MORI.
+ * Keep her away from overly aggressive monospace glyph shaping.
+ */
+
+.section:first-of-type
+.stat-grid
+.stat-card:nth-child(4)
+.stat-card__value {
+  font-family:
+    "Segoe UI Symbol",
+    "Noto Sans Symbols",
+    var(--font-body);
+
+  font-weight: 400;
+
+  letter-spacing: 0;
+}
+
+.stat-card__hint {
+  margin:
+    0.75rem
+    0
+    0;
+
+  color:
+    var(--color-muted-strong);
+
+  font-family:
+    var(--font-mono);
+
+  font-size: 0.72rem;
+
+  line-height: 1.55;
+}
+
+/* =========================================================
+   LARGE PANELS
+   ========================================================= */
+
+.panel {
+  position: relative;
+
+  overflow: hidden;
+
+  border:
+    var(--border-thin);
+
+  border-radius: 0;
+
+  background:
+    linear-gradient(
+      135deg,
+      rgba(157, 77, 255, 0.055),
+      transparent 34%
+    ),
+    rgba(8, 4, 12, 0.95);
+
+  box-shadow:
+    var(--shadow-brutal);
+}
+
+.panel::before {
+  position: absolute;
+
+  top: 0.55rem;
+  right: 0.55rem;
+
+  width: 0.9rem;
+  height: 0.9rem;
+
+  border-top:
+    1px solid
+    rgba(192, 140, 255, 0.5);
+
+  border-right:
+    1px solid
+    rgba(192, 140, 255, 0.5);
+
+  pointer-events: none;
+
+  content: "";
+}
+
+.panel__inner {
+  position: relative;
+
+  z-index: 1;
+
+  padding:
+    clamp(
+      1.1rem,
+      2.5vw,
+      1.5rem
+    );
+}
+
+.panel__title {
+  margin: 0;
+
+  color:
+    var(--color-text);
+
+  font-size:
+    clamp(
+      1rem,
+      1.8vw,
+      1.2rem
+    );
+
+  font-weight: 800;
+}
+
+.panel__subtitle {
+  margin:
+    0.45rem
+    0
+    0;
+
+  color:
+    var(--color-muted);
+
+  font-family:
+    var(--font-mono);
+
+  font-size: 0.72rem;
+
+  line-height: 1.6;
+}
+
+/*
+ * Nested stat grids inside panels are two-column,
+ * not four-column like the main health strip.
+ */
+
+.panel .stat-grid {
+  grid-template-columns:
+    repeat(2, minmax(0, 1fr));
+}
+
+/* =========================================================
+   INPUTS
+   ========================================================= */
+
+.input,
+.textarea {
+  width: 100%;
+
+  border:
+    1px solid
+    rgba(157, 77, 255, 0.42);
+
+  border-radius: 0;
+
+  padding:
+    0.9rem
+    1rem;
+
+  color:
+    var(--color-text);
+
+  font-family:
+    var(--font-mono);
+
+  background:
+    rgba(2, 0, 6, 0.88);
+
+  outline: none;
+
+  transition:
+    border-color var(--transition),
+    background var(--transition),
+    box-shadow var(--transition);
+}
+
+.input::placeholder,
+.textarea::placeholder {
+  color:
+    rgba(189, 169, 230, 0.48);
+}
+
+.input:focus,
+.textarea:focus {
+  border-color:
+    var(--color-purple-soft);
+
+  background:
+    rgba(5, 2, 9, 0.98);
+
+  box-shadow:
+    4px 4px 0
+    rgba(157, 77, 255, 0.14);
+}
+
+.textarea {
+  min-height: 11rem;
+
+  resize: vertical;
+}
+
+/* =========================================================
+   BUTTONS
+   ========================================================= */
+
+.button-row {
+  display: flex;
+
+  flex-wrap: wrap;
+
+  gap: 0.85rem;
+
+  align-items: center;
+}
+
+.button {
+  display: inline-flex;
+
+  min-height: 3rem;
+
+  align-items: center;
+  justify-content: center;
+
+  border:
+    var(--border-thin);
+
+  border-radius: 0;
+
+  padding:
+    0.8rem
+    1rem;
+
+  color:
+    var(--color-purple-soft);
+
+  font-family:
+    var(--font-mono);
+
+  font-size: 0.76rem;
+  font-weight: 800;
+
+  letter-spacing: 0.03em;
+
+  text-transform: uppercase;
+
+  background:
+    rgba(11, 6, 16, 0.88);
+
+  transition:
+    transform var(--transition),
+    border-color var(--transition),
+    color var(--transition),
+    background var(--transition),
+    box-shadow var(--transition);
+}
+
+.button:hover {
+  transform:
+    translate(-2px, -2px);
+
+  border-color:
+    var(--color-purple-soft);
+
+  color:
+    var(--color-accent);
+
+  background:
+    rgba(157, 77, 255, 0.12);
+
+  box-shadow:
+    6px 6px 0
+    rgba(157, 77, 255, 0.15);
+}
+
+.button--primary {
+  color:
+    var(--color-text);
+
+  background:
+    var(--color-purple-deep);
+
+  box-shadow:
+    6px 6px 0
+    rgba(244, 240, 255, 0.14);
+}
+
+.button--primary:hover {
+  border-color:
+    var(--color-accent-soft);
+
+  color:
+    var(--color-text);
+
+  background:
+    #5b1d91;
+
+  box-shadow:
+    8px 8px 0
+    rgba(244, 240, 255, 0.2);
+}
+
+/* =========================================================
+   LITTLE UI TEXT
+   ========================================================= */
+
+.mof-note {
+  color:
+    var(--color-muted);
+
+  font-family:
+    var(--font-mono);
+
+  font-size: 0.7rem;
+}
+
+.kbd {
+  display: inline-block;
+
+  border:
+    1px solid
+    var(--color-line);
+
+  border-radius: 0;
+
+  padding:
+    0.2rem
+    0.45rem;
+
+  color:
+    var(--color-muted-strong);
+
+  font-family:
+    var(--font-mono);
+
+  font-size: 0.7rem;
+
+  background:
+    rgba(5, 2, 9, 0.94);
+}
+
+/* =========================================================
+   ANIMATION
+   ========================================================= */
+
+@keyframes moth-background-drift {
+  0% {
+    background-position:
+      50% 0;
+
+    opacity: 0.32;
+  }
+
+  25% {
+    background-position:
+      calc(50% + 2.4rem)
+      -14rem;
+
+    opacity: 0.38;
+  }
+
+  50% {
+    background-position:
+      calc(50% - 1.8rem)
+      -28rem;
+
+    opacity: 0.35;
+  }
+
+  75% {
+    background-position:
+      calc(50% + 1.2rem)
+      -42rem;
+
+    opacity: 0.39;
+  }
+
+  100% {
+    background-position:
+      50%
+      -56rem;
+
+    opacity: 0.32;
+  }
+}
+
+@keyframes global-grid-breathe {
+  from {
+    opacity: 0.76;
+
+    filter:
+      brightness(0.96);
+  }
+
+  to {
+    opacity: 0.9;
+
+    filter:
+      brightness(1.08);
+  }
+}
+
+/* =========================================================
+   RESPONSIVE
+   ========================================================= */
+
+@media (max-width: 900px) {
+  .grid--cards {
+    grid-template-columns:
+      1fr;
+  }
+
+  .stat-grid {
+    grid-template-columns:
+      repeat(2, minmax(0, 1fr));
+  }
+}
+
+@media (max-width: 620px) {
+  .page {
+    width:
+      min(
+        var(--container),
+        calc(100% - 2rem)
+      );
+
+    padding-top: 2rem;
+  }
+
+  .hero {
+    padding-top: 1rem;
+  }
+
+  .hero__title {
+    font-size:
+      clamp(
+        3.6rem,
+        19vw,
+        5.4rem
+      );
+  }
+
+  .stat-grid,
+  .panel .stat-grid {
+    grid-template-columns:
+      1fr;
+  }
+
+  .moth-shell::before {
+    background-size:
+      1080px
+      auto;
+
+    opacity: 0.25;
+
+    filter:
+      brightness(1.12)
+      saturate(1.04);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  body::before,
+  .moth-shell::before {
+    animation: none;
+  }
+}
+
+/* =========================================================
+   MORI FACE
+   ========================================================= */
+
+.mori-face {
+  display: inline-flex;
+  align-items: flex-end;
+  gap: 0.08em;
+
+  color: var(--color-text);
+
+  font-family:
+    "Segoe UI Symbol",
+    "Noto Sans Symbols",
+    "Noto Sans",
+    sans-serif;
+
+  font-size: 1em;
+  font-weight: 400;
+
+  line-height: 1;
+
+  letter-spacing: 0;
+
+  white-space: nowrap;
+}
+
+.mori-face__eye {
+  position: relative;
+
+  display: inline-flex;
+
+  align-items: center;
+  justify-content: center;
+
+  width: 0.72em;
+}
+
+.mori-face__mark {
+  position: absolute;
+
+  top: -0.44em;
+
+  color: var(--color-text);
+
+  font-size: 0.58em;
+
+  line-height: 1;
+
+  pointer-events: none;
+}
+
+.mori-face__mark--left {
+  left: 0.08em;
+}
+
+.mori-face__mark--right {
+  right: 0.08em;
+}
+
+.mori-face__slash {
+  display: inline-block;
+
+  transform: translateY(-0.02em);
+}
+
+.mori-face__paw {
+  display: inline-block;
+
+  margin-left: 0.08em;
+
+  transform:
+    translateY(0.1em)
+    rotate(4deg);
+
+  color: var(--color-purple-soft);
+}
+
+/* Remove generic cyber-HUD corner ornaments. */
+.stat-card::before,
+.stat-card::after,
+.panel::before,
+.panel::after {
+  display: none !important;
+  content: none !important;
+}
+
+/* Sections stand on the page instead of living inside giant dashboard boxes. */
+.panel {
+  border: 0;
+  padding: 0;
+  background: transparent;
+  box-shadow: none;
+}
+
+.panel__inner {
+  padding: 0;
+}
+
+/* Simple terminal-like connectivity readout. */
+.connectivity-readout {
+  display: grid;
+  gap: 0.65rem;
+  max-width: 42rem;
+  font-family: var(--font-mono);
+}
+
+.connectivity-readout p {
+  display: grid;
+  grid-template-columns: minmax(10rem, 14rem) 1fr;
+  gap: 1rem;
+  margin: 0;
+  color: var(--color-text);
+  line-height: 1.6;
+}
+
+.connectivity-readout p > span {
+  color: var(--color-muted);
+}
+
+/* Submission form now lives directly on the page. */
+.manual-submission {
+  display: grid;
+  gap: 1rem;
+}
+
+.submission-response {
+  display: grid;
+  gap: 0.35rem;
+  margin-top: 1.5rem;
+  border-left: 2px solid var(--color-purple);
+  padding-left: 1rem;
+  color: var(--color-muted-strong);
+  font-family: var(--font-mono);
+}
+
+.submission-response strong {
+  color: var(--color-text);
+}
+
+/* Keep headings text-only. */
+.section-title {
+  background: transparent;
+}
+
+.section-title::selection {
+  background: rgba(157, 77, 255, 0.28);
+}

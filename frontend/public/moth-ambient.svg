@@ -1,0 +1,332 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg
+  xmlns="http://www.w3.org/2000/svg"
+  width="1600"
+  height="1350"
+  viewBox="0 0 1600 1350"
+  preserveAspectRatio="xMidYMid meet"
+>
+  <defs>
+    <style>
+      .cmd {
+        font-family:
+          "JetBrains Mono",
+          "Fira Code",
+          Consolas,
+          monospace;
+        font-size: 23px;
+        letter-spacing: 1.1px;
+        fill: #c08cff;
+        opacity: 0.3;
+      }
+
+      .soft {
+        font-family:
+          "JetBrains Mono",
+          "Fira Code",
+          Consolas,
+          monospace;
+        font-size: 17px;
+        letter-spacing: 1px;
+        fill: #f4f0ff;
+        opacity: 0.17;
+      }
+
+      .dim {
+        font-family:
+          "JetBrains Mono",
+          "Fira Code",
+          Consolas,
+          monospace;
+        font-size: 15px;
+        letter-spacing: 0.8px;
+        fill: #bda9e6;
+        opacity: 0.13;
+      }
+
+      .moth {
+        font-family:
+          "Times New Roman",
+          "Noto Serif Tibetan",
+          "Noto Serif",
+          serif;
+        font-size: 27px;
+        fill: #c08cff;
+        opacity: 0.24;
+      }
+
+      .moth-large {
+        font-family:
+          "Times New Roman",
+          "Noto Serif Tibetan",
+          "Noto Serif",
+          serif;
+        font-size: 34px;
+        fill: #c08cff;
+        opacity: 0.19;
+      }
+
+      .cat {
+        font-family:
+          "JetBrains Mono",
+          "Fira Code",
+          Consolas,
+          monospace;
+        font-size: 19px;
+        letter-spacing: 0.5px;
+        fill: #f4f0ff;
+        opacity: 0.19;
+      }
+
+      .thin {
+        font-family:
+          "JetBrains Mono",
+          "Fira Code",
+          Consolas,
+          monospace;
+        font-size: 16px;
+        fill: #9d4dff;
+        opacity: 0.12;
+      }
+    </style>
+  </defs>
+
+  <!-- submission stream -->
+  <g transform="translate(70 110) rotate(-5)">
+    <text class="cmd" x="0" y="0">
+      $ tail -f ./moth/submissions.log
+    </text>
+
+    <text class="soft" x="0" y="34">
+      +------------------------------------------+
+    </text>
+
+    <text class="dim" x="0" y="62">
+      | queue=hungry   retry_worker=awake        |
+    </text>
+
+    <text class="dim" x="0" y="90">
+      | gameserver=probably_listening            |
+    </text>
+
+    <text class="soft" x="0" y="118">
+      +------------------------------------------+
+    </text>
+  </g>
+
+  <!-- moth swarm -->
+  <g transform="translate(1060 145) rotate(7)">
+    <text class="moth" x="0" y="0">
+      ཐི༏ཋྀ
+    </text>
+
+    <text class="moth" x="78" y="18">
+      ཐིཋྀ
+    </text>
+
+    <text class="moth" x="148" y="-7">
+      ʚïɞ
+    </text>
+
+    <text class="dim" x="0" y="57">
+      moth_swarm=transporting
+    </text>
+
+    <text class="dim" x="0" y="85">
+      please_do_not_feed_duplicates=true
+    </text>
+  </g>
+
+  <!-- MORI judges concurrency -->
+  <g transform="translate(920 315) rotate(-4)">
+    <text class="cat" x="0" y="0">
+      /•᷅‎‎•᷄\੭  i see your race condition
+    </text>
+
+    <text class="dim" x="2" y="32">
+      cat_status=judging_concurrency
+    </text>
+  </g>
+
+  <!-- ornate moth -->
+  <g transform="translate(145 465) rotate(3)">
+    <text class="moth-large" x="0" y="0">
+      ࿔‧ ֶָ֢˚˖𐦍˖˚ֶָ֢ ‧࿔
+    </text>
+
+    <text class="thin" x="0" y="43">
+      /* quiet moth process */
+    </text>
+
+    <text class="dim" x="0" y="73">
+      transport_loop=awake
+    </text>
+
+    <text class="dim" x="0" y="101">
+      duplicate_detection=MORI
+    </text>
+  </g>
+
+  <!-- retry queue -->
+  <g transform="translate(805 510) rotate(5)">
+    <text class="cmd" x="0" y="0">
+      $ inspect ./retry_queue
+    </text>
+
+    <text class="dim" x="22" y="36">
+      ERR              → scheduled
+    </text>
+
+    <text class="dim" x="22" y="64">
+      TIMEOUT          → scheduled
+    </text>
+
+    <text class="dim" x="22" y="92">
+      CONNECTION_ERROR → scheduled
+    </text>
+
+    <text class="dim" x="22" y="120">
+      OK               → mof delivered
+    </text>
+  </g>
+
+  <!-- transmission table -->
+  <g transform="translate(120 700) rotate(-3)">
+    <text class="cmd" x="0" y="0">
+      +-- transmission table ----------------------+
+    </text>
+
+    <text class="dim" x="0" y="31">
+      | worker[01] → gameserver                     |
+    </text>
+
+    <text class="dim" x="0" y="59">
+      | worker[02] → gameserver                     |
+    </text>
+
+    <text class="dim" x="0" y="87">
+      | retry      → waiting politely               |
+    </text>
+
+    <text class="dim" x="0" y="115">
+      | MORI       → watching everyone              |
+    </text>
+
+    <text class="cmd" x="0" y="146">
+      +---------------------------------------------+
+    </text>
+  </g>
+
+  <!-- MORI eats stale state -->
+  <g transform="translate(1040 750) rotate(-6)">
+    <text class="cat" x="0" y="0">
+      /•᷅‎‎•᷄\੭  i ate your stale lease
+    </text>
+
+    <text class="dim" x="2" y="32">
+      fencing_status=delicious
+    </text>
+  </g>
+
+  <!-- little moth cluster -->
+  <g transform="translate(1080 880) rotate(5)">
+    <text class="moth-large" x="0" y="0">
+      ཐི༏ཋྀ    ཐིཋྀ
+    </text>
+
+    <text class="moth" x="-45" y="48">
+      ⁺‧₊˚ ཐི⋆♱⋆ཋྀ ˚₊‧⁺
+    </text>
+
+    <text class="dim" x="-12" y="82">
+      flag_delivery=probably_fine
+    </text>
+  </g>
+
+  <!-- database -->
+  <g transform="translate(115 945) rotate(4)">
+    <text class="cmd" x="0" y="0">
+      $ sqlite3 moth.db
+    </text>
+
+    <text class="dim" x="18" y="35">
+      plaintext_flags=ABSOLUTELY_NOT
+    </text>
+
+    <text class="dim" x="18" y="63">
+      encryption=AESGCM
+    </text>
+
+    <text class="dim" x="18" y="91">
+      fingerprints=HMAC_SHA256
+    </text>
+  </g>
+
+  <!-- accidental stress-test lore -->
+  <g transform="translate(780 1045) rotate(-5)">
+    <text class="cmd" x="0" y="0">
+      STRESS_TEST_5000.log
+    </text>
+
+    <text class="dim" x="18" y="35">
+      offered=5000
+    </text>
+
+    <text class="dim" x="18" y="63">
+      delivered=5000
+    </text>
+
+    <text class="dim" x="18" y="91">
+      connection_errors=1
+    </text>
+
+    <text class="dim" x="18" y="119">
+      retry_worker_avenged_it=true
+    </text>
+  </g>
+
+  <!-- patch notes -->
+  <g transform="translate(950 1190) rotate(4)">
+    <text class="cmd" x="0" y="0">
+      MOTH_PATCH_NOTES.md
+    </text>
+
+    <text class="dim" x="18" y="35">
+      + gave mof a semaphore
+    </text>
+
+    <text class="dim" x="18" y="63">
+      + taught MORI atomic finalization
+    </text>
+
+    <text class="dim" x="18" y="91">
+      + fenced stale workers
+    </text>
+
+    <text class="dim" x="18" y="119">
+      + survived violence
+    </text>
+  </g>
+
+  <!-- final MORI graffiti -->
+  <g transform="translate(120 1240) rotate(-4)">
+    <text class="cat" x="0" y="0">
+      /•᷅‎‎•᷄\੭  unknown uppercase code detected
+    </text>
+
+    <text class="dim" x="0" y="33">
+      response=we'll_try_again
+    </text>
+  </g>
+
+  <!-- tiny stray mof -->
+  <g transform="translate(630 1280) rotate(7)">
+    <text class="moth" x="0" y="0">
+      ཐི༏ཋྀ
+    </text>
+
+    <text class="dim" x="54" y="2">
+      carrying flag...
+    </text>
+  </g>
+</svg>
