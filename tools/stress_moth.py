@@ -1,3 +1,5 @@
+"""Exercise MOTH with concurrent authenticated flag-submission traffic."""
+
 import argparse
 import asyncio
 import base64
@@ -27,6 +29,7 @@ def make_flag(
     request_id: int,
     item_id: int = 0,
 ) -> str:
+    """Derive a deterministic valid flag from one stress-run and item identifier."""
     seed = (
         f"{run_id}:{request_id}:{item_id}"
     ).encode()
@@ -46,6 +49,7 @@ def percentile(
     values: list[float],
     percentile_value: float,
 ) -> float:
+    """Return the nearest-rank percentile used by the stress-harness summary."""
     if not values:
         return 0.0
 
@@ -60,6 +64,7 @@ def percentile(
 
 
 def db_snapshot() -> dict[str, int]:
+    """Read best-effort database size and row counts without disturbing the service."""
     path = Path(
         database.DATABASE_PATH
     )
@@ -142,6 +147,7 @@ async def perform_request(
     token: str,
     batch_size: int,
 ) -> tuple[int | None, float, str | None]:
+    """Execute one bounded stress request and return status, latency, and failure type."""
     async with semaphore:
         started = time.perf_counter()
 
@@ -248,6 +254,7 @@ async def run_stress(
     concurrency: int,
     batch_size: int,
 ) -> None:
+    """Validate harness limits, run concurrent traffic, and print aggregate results."""
     if requests <= 0:
         raise ValueError(
             "requests must be positive"
@@ -455,6 +462,7 @@ async def run_stress(
 
 
 def main() -> None:
+    """Parse stress-harness options and run the asynchronous workload."""
     parser = argparse.ArgumentParser(
         description=(
             "Local-only MOTH stress harness"

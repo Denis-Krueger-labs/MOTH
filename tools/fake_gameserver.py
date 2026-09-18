@@ -1,3 +1,5 @@
+"""Run a small TCP game-server stand-in for local MOTH testing."""
+
 import argparse
 import asyncio
 
@@ -8,6 +10,7 @@ async def handle_client(
     *,
     delay_ms: float,
 ) -> None:
+    """Serve one test-protocol connection, optionally delaying its successful reply."""
     peer = writer.get_extra_info("peername")
 
     try:
@@ -55,6 +58,7 @@ async def handle_client(
 
 
 async def main() -> None:
+    """Parse local server options and run the fake game server until interrupted."""
     parser = argparse.ArgumentParser()
 
     parser.add_argument(

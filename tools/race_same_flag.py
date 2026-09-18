@@ -1,3 +1,5 @@
+"""Reproduce concurrent submissions of the same flag against MOTH."""
+
 import asyncio
 import base64
 import hashlib
@@ -16,6 +18,7 @@ PORT = 6666
 
 
 def make_flag() -> str:
+    """Generate one valid FAUST-format flag for the duplicate-submission race."""
     digest = hashlib.sha256(
         uuid.uuid4().bytes
     ).digest()[:24]
@@ -28,6 +31,8 @@ def make_flag() -> str:
 
 
 class FakeGameServer:
+    """Minimal game server that records every flag it receives during the race."""
+
     def __init__(self) -> None:
         self.received: list[str] = []
         self.server = None
@@ -37,6 +42,7 @@ class FakeGameServer:
         reader: asyncio.StreamReader,
         writer: asyncio.StreamWriter,
     ) -> None:
+        """Answer one protocol request and retain its flag for the final assertion."""
         try:
             writer.write(
                 b"MOTH duplicate race test\n\n"
@@ -75,6 +81,7 @@ class FakeGameServer:
                 pass
 
     async def start(self) -> None:
+        """Start the local fake server used by the race harness."""
         self.server = await asyncio.start_server(
             self.handle_client,
             HOST,
@@ -82,6 +89,7 @@ class FakeGameServer:
         )
 
     async def stop(self) -> None:
+        """Stop the local fake server when the race harness completes."""
         if self.server is None:
             return
 
@@ -90,6 +98,7 @@ class FakeGameServer:
 
 
 async def main() -> None:
+    """Submit one flag concurrently and report whether MOTH deduplicated it."""
     request_count = 100
     concurrency = 100
 
@@ -116,6 +125,7 @@ async def main() -> None:
     async def submit_one(
         client: httpx.AsyncClient,
     ):
+        """Send one bounded concurrent request for the shared test flag."""
         async with semaphore:
             started = time.perf_counter()
 
