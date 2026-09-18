@@ -1,3 +1,5 @@
+"""Expose lightweight liveness information for MOTH clients."""
+
 from fastapi import APIRouter
 
 router = APIRouter(

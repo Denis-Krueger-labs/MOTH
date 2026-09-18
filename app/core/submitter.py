@@ -1,23 +1,32 @@
+"""Submit flags to the game server over its line-oriented TCP protocol."""
+
 import asyncio
 from dataclasses import dataclass
 
 
 @dataclass
 class SubmissionResult:
+    """Represent one validated line response from the game server."""
+
     flag: str
     code: str
     message: str | None = None
 
 
 class SubmissionConnectionError(ConnectionError):
+    """Indicate that the game server could not be reached or disconnected."""
+
     pass
 
 
 class SubmissionTimeoutError(TimeoutError):
+    """Indicate that the game server did not answer before the configured deadline."""
+
     pass
 
 
 def parse_submission_response(line: str) -> SubmissionResult:
+    """Parse a server response and reject malformed or suspicious status codes."""
     parts = line.strip().split(maxsplit=2)
 
     if len(parts) < 2:
@@ -43,6 +52,7 @@ async def submit_flag(
     port: int,
     timeout: float = 5.0,
 ) -> SubmissionResult:
+    """Submit one flag using the server greeting and line-based response protocol."""
     writer: asyncio.StreamWriter | None = None
 
     try:

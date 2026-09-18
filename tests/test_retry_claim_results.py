@@ -1,3 +1,5 @@
+"""Verify leased retry-result recording and fencing-token protections."""
+
 import sqlite3
 
 from app.db import database

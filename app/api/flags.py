@@ -1,3 +1,5 @@
+"""Provide authenticated HTTP endpoints for submitting and retrying flags."""
+
 import asyncio
 import re
 
@@ -69,6 +71,7 @@ submission_capacity = SubmissionCapacity()
 def clean_and_validate_flag(
     value: str,
 ) -> str:
+    """Normalize a value and require the exact FAUST flag format."""
     value = value.strip()
 
     if not value:
@@ -90,6 +93,8 @@ def clean_and_validate_flag(
 
 
 class FlagSubmission(BaseModel):
+    """Validate the metadata accompanying one submitted flag."""
+
     flag: str = Field(
         min_length=1,
         max_length=512,
@@ -104,12 +109,15 @@ class FlagSubmission(BaseModel):
         cls,
         value: str,
     ) -> str:
+        """Apply the shared format validation to Pydantic request input."""
         return clean_and_validate_flag(
             value
         )
 
 
 class BatchFlagSubmission(BaseModel):
+    """Validate one bounded collection of flags with shared metadata."""
+
     flags: list[str] = Field(
         min_length=1,
         max_length=MAX_BATCH_SIZE,
@@ -125,10 +133,12 @@ async def _process_valid_flag(
     service: str | None,
     source: str | None,
 ) -> dict[str, object]:
+    """Submit a validated flag after atomically claiming its initial attempt."""
     worker_id = (
         f"initial-{uuid4().hex}"
     )
 
+    # Claim before network I/O so concurrent requests cannot submit the same flag twice.
     claim = claim_initial_submission(
         flag,
         worker_id,
@@ -289,6 +299,7 @@ async def _process_valid_flag(
         }
 
     finally:
+        # Every acquired slot and unfinalized claim must be released on every exit path.
         submission_capacity.release()
 
         if not finalized:
@@ -303,6 +314,7 @@ def _update_batch_summary(
     summary: dict[str, int],
     processed: dict[str, object],
 ) -> None:
+    """Count one per-flag result under the batch response's stable categories."""
     code = processed["code"]
 
     if (
@@ -357,6 +369,7 @@ def _update_batch_summary(
 async def submit_flag(
     submission: FlagSubmission,
 ):
+    """Submit one validated flag and translate transient failures into HTTP errors."""
     result = await _process_valid_flag(
         submission.flag,
         service=submission.service,
@@ -397,6 +410,7 @@ async def submit_flag(
 async def submit_flag_batch(
     submission: BatchFlagSubmission,
 ):
+    """Process a batch with per-item results, request-local deduplication, and bounded concurrency."""
     summary = {
         "received": len(
             submission.flags
@@ -482,6 +496,7 @@ async def submit_flag_batch(
             )
         )
 
+    # The batch must not turn one request into unbounded game-server connections.
     semaphore = asyncio.Semaphore(
         MAX_BATCH_CONCURRENCY
     )
@@ -494,6 +509,7 @@ async def submit_flag_batch(
         str,
         dict[str, object],
     ]:
+        """Run one unique flag while holding a bounded batch-concurrency slot."""
         async with semaphore:
             processed = (
                 await _process_valid_flag(
@@ -581,6 +597,7 @@ async def submit_flag_batch(
             "duplicate"
         ] += 1
 
+    # Rebuild the response by original index because asynchronous work completes out of order.
     results = [
         results_by_index[index]
         for index in range(

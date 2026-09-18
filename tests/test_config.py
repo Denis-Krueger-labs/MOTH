@@ -1,3 +1,5 @@
+"""Verify runtime configuration defaults, parsing, and invalid-value handling."""
+
 import pytest
 
 from app.core.config import (

@@ -1,3 +1,5 @@
+"""Verify application lifecycle startup, shutdown, and initialization work."""
+
 from threading import Event
 
 from fastapi.testclient import TestClient

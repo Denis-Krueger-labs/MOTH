@@ -1,3 +1,5 @@
+"""Verify bounded concurrent submission capacity and overload responses."""
+
 import threading
 from concurrent.futures import (
     ThreadPoolExecutor,

@@ -1,3 +1,5 @@
+"""Verify retry claims are exclusive and expired leases can be reclaimed."""
+
 import sqlite3
 
 from app.db import database

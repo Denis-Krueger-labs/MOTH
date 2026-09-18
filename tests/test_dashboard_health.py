@@ -1,3 +1,5 @@
+"""Verify scheduler health reporting and game-server connectivity probes."""
+
 import asyncio
 
 from fastapi.testclient import TestClient

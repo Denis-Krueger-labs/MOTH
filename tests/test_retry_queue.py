@@ -1,3 +1,5 @@
+"""Verify retry-queue ordering, eligibility, and input validation."""
+
 import pytest
 
 from app.db import database

@@ -1,3 +1,5 @@
+"""Verify TCP submission protocol parsing and transport error handling."""
+
 import asyncio
 
 import pytest

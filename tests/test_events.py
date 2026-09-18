@@ -1,3 +1,5 @@
+"""Verify privacy-safe event history retrieval and validation."""
+
 import sqlite3
 
 import pytest

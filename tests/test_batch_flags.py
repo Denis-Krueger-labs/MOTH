@@ -1,3 +1,5 @@
+"""Verify batch flag submissions, per-item errors, and request limits."""
+
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 

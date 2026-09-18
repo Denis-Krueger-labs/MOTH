@@ -1,3 +1,5 @@
+"""Verify flag endpoint validation, deduplication, and durable outcomes."""
+
 from fastapi.testclient import TestClient
 
 from app import main

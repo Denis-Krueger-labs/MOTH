@@ -1,3 +1,5 @@
+"""Coordinate atomic claims and finalization for initial flag submissions."""
+
 import logging
 import secrets
 import sqlite3
@@ -28,18 +30,22 @@ DEFAULT_INITIAL_LEASE_SECONDS = 30
     slots=True,
 )
 class InitialSubmissionClaim:
+    """Describe whether an initial submission is owned, busy, or already known."""
+
     status: str
     lease_token: str | None = None
     existing_state: str | None = None
 
 
 def _utc_now() -> datetime:
+    """Return the timezone-aware instant used for initial-claim leases."""
     return datetime.now(
         timezone.utc
     )
 
 
 def initialize_submission_gate() -> None:
+    """Create the table and index used to coordinate in-flight initial submissions."""
     with sqlite3.connect(
         database.DATABASE_PATH
     ) as connection:
@@ -75,6 +81,7 @@ def claim_initial_submission(
         DEFAULT_INITIAL_LEASE_SECONDS
     ),
 ) -> InitialSubmissionClaim:
+    """Atomically claim an unseen flag or report its existing or in-flight state."""
     owner = owner.strip()
 
     if not owner:
@@ -109,6 +116,7 @@ def claim_initial_submission(
     with sqlite3.connect(
         database.DATABASE_PATH
     ) as connection:
+        # Reserve the fingerprint before network I/O so concurrent requests cannot duplicate it.
         connection.execute(
             "BEGIN IMMEDIATE"
         )
@@ -193,6 +201,7 @@ def finalize_initial_submission(
     service: str | None = None,
     source: str | None = None,
 ) -> bool:
+    """Store a result only when its owner and fencing token still hold the claim."""
     if (
         state
         not in database.VALID_SUBMISSION_STATES
@@ -251,6 +260,7 @@ def finalize_initial_submission(
         database.DATABASE_PATH,
         isolation_level=None,
     ) as connection:
+        # Finalization and claim deletion share one transaction to avoid stranded claims.
         connection.execute(
             "BEGIN IMMEDIATE"
         )
@@ -439,6 +449,7 @@ def release_initial_submission(
     owner: str,
     lease_token: str,
 ) -> bool:
+    """Release an unfinalized claim only when the original owner presents its token."""
     fingerprint = fingerprint_flag(
         flag
     )

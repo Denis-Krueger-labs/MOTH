@@ -1,3 +1,5 @@
+"""Persist encrypted flag submissions, retry scheduling, and worker leases."""
+
 import os
 import secrets
 import sqlite3
@@ -32,6 +34,8 @@ DEFAULT_RETRY_LEASE_SECONDS = 30
 
 @dataclass
 class RetryCandidate:
+    """Represent a decrypted retry record together with its worker lease metadata."""
+
     id: int
     flag: str
     response_code: str | None
@@ -49,6 +53,7 @@ class RetryCandidate:
 
 
 def _utc_now() -> str:
+    """Return a sortable, timezone-aware timestamp for persistent records."""
     return datetime.now(
         timezone.utc
     ).isoformat()
@@ -58,6 +63,7 @@ def _add_seconds(
     timestamp: str,
     seconds: int,
 ) -> str:
+    """Add a retry or lease duration to an ISO timestamp."""
     value = datetime.fromisoformat(timestamp)
 
     return (
@@ -69,6 +75,7 @@ def _add_seconds(
 def _retry_delay_seconds(
     retry_count: int,
 ) -> int:
+    """Calculate capped exponential backoff for a failed retry attempt."""
     if retry_count <= 0:
         raise ValueError(
             "mof cannot schedule retry number zero"
@@ -88,6 +95,7 @@ def _retry_delay_seconds(
 def _get_columns(
     connection: sqlite3.Connection,
 ) -> set[str]:
+    """Return existing column names so schema migrations can stay additive."""
     rows = connection.execute(
         "PRAGMA table_info(flags)"
     ).fetchall()
@@ -101,6 +109,7 @@ def _get_columns(
 def _ensure_columns(
     connection: sqlite3.Connection,
 ) -> None:
+    """Add columns required by newer releases without rebuilding the table."""
     columns = _get_columns(connection)
 
     migrations = {
@@ -165,6 +174,7 @@ def _ensure_columns(
 
 
 def initialize_database() -> None:
+    """Create the submission schema and apply compatible additive migrations."""
     with sqlite3.connect(
         DATABASE_PATH
     ) as connection:
@@ -251,6 +261,7 @@ def initialize_database() -> None:
 
 
 def has_flag(flag: str) -> bool:
+    """Check whether a flag fingerprint already has a terminal submission record."""
     fingerprint = fingerprint_flag(flag)
 
     with sqlite3.connect(
@@ -282,6 +293,7 @@ def record_submission(
     service: str | None = None,
     source: str | None = None,
 ) -> None:
+    """Persist an initial result and schedule another attempt when it is retryable."""
     if state not in VALID_SUBMISSION_STATES:
         raise ValueError(
             "mof does not recognize this submission state"
@@ -417,6 +429,7 @@ def record_claimed_submission(
     service: str | None = None,
     source: str | None = None,
 ) -> bool:
+    """Persist a retry result only when the caller still owns its active lease."""
     if state not in VALID_SUBMISSION_STATES:
         raise ValueError(
             "mof does not recognize this submission state"
@@ -445,6 +458,7 @@ def record_claimed_submission(
     ) as connection:
         connection.row_factory = sqlite3.Row
 
+        # Serialize result finalization so an expired lease cannot overwrite a newer claim.
         connection.execute(
             "BEGIN IMMEDIATE"
         )
@@ -596,6 +610,7 @@ def record_claimed_submission(
 def get_submission_record(
     flag: str,
 ) -> dict[str, str | int | None] | None:
+    """Return the safe persisted metadata for a flag, if it exists."""
     fingerprint = fingerprint_flag(flag)
 
     with sqlite3.connect(
@@ -632,6 +647,7 @@ def get_submission_record(
 def _row_to_retry_candidate(
     row: sqlite3.Row,
 ) -> RetryCandidate:
+    """Decrypt one database row into the retry worker's in-memory representation."""
     flag = decrypt_flag(
         row["flag_nonce"],
         row["flag_ciphertext"],
@@ -658,6 +674,7 @@ def _row_to_retry_candidate(
 def _rows_to_retry_candidates(
     rows: list[sqlite3.Row],
 ) -> list[RetryCandidate]:
+    """Convert a collection of encrypted rows into retry candidates."""
     return [
         _row_to_retry_candidate(row)
         for row in rows
@@ -667,6 +684,7 @@ def _rows_to_retry_candidates(
 def get_retryable_submissions(
     limit: int = 100,
 ) -> list[RetryCandidate]:
+    """Return retryable records in oldest-update order, including leased records."""
     if limit <= 0:
         raise ValueError(
             "mof needs a positive retry queue limit"
@@ -714,6 +732,7 @@ def get_retryable_submissions(
 def get_due_retryable_submissions(
     limit: int = 100,
 ) -> list[RetryCandidate]:
+    """Return retries that are due and unprotected by a current worker lease."""
     if limit <= 0:
         raise ValueError(
             "mof needs a positive retry queue limit"
@@ -774,6 +793,7 @@ def claim_due_retryable_submission(
     worker_id: str,
     lease_seconds: int = DEFAULT_RETRY_LEASE_SECONDS,
 ) -> RetryCandidate | None:
+    """Atomically lease the oldest due retry and issue a fresh fencing token."""
     worker_id = worker_id.strip()
 
     if not worker_id:
@@ -801,6 +821,7 @@ def claim_due_retryable_submission(
     ) as connection:
         connection.row_factory = sqlite3.Row
 
+        # SQLite's write lock makes selecting and leasing one retry atomic across workers.
         connection.execute(
             "BEGIN IMMEDIATE"
         )
@@ -920,6 +941,7 @@ def claim_due_retryable_submission(
 
 
 def store_flag(flag: str) -> bool:
+    """Store an unseen flag as terminal for callers using the legacy helper."""
     if has_flag(flag):
         return False
 

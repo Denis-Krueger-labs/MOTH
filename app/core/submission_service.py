@@ -1,3 +1,5 @@
+"""Translate one game-server submission attempt into a durable outcome."""
+
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 
@@ -33,6 +35,8 @@ Submitter = Callable[
 
 @dataclass(frozen=True, slots=True)
 class SubmissionOutcome:
+    """Describe one normalized submission result and its retry eligibility."""
+
     code: str
     message: str | None
     terminal: bool
@@ -43,6 +47,7 @@ async def submit_once(
     *,
     submitter: Submitter = default_submitter,
 ) -> SubmissionOutcome:
+    """Convert a game-server attempt into a terminal or retryable outcome."""
     try:
         result = await submitter(
             flag,

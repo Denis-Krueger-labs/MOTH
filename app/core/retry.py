@@ -1,3 +1,5 @@
+"""Claim and process retryable flag submissions in a background worker."""
+
 from dataclasses import dataclass
 from uuid import uuid4
 
@@ -19,6 +21,8 @@ from app.db.events import (
 
 @dataclass
 class RetryAttempt:
+    """Record one retry claim's submission outcome and persistence result."""
+
     record_id: int
     state: str
     code: str
@@ -27,6 +31,7 @@ class RetryAttempt:
 
 
 def _new_worker_id() -> str:
+    """Create a unique identifier for a retry worker invocation."""
     return f"retry-{uuid4().hex}"
 
 
@@ -35,6 +40,7 @@ async def retry_pending_once(
     worker_id: str | None = None,
     lease_seconds: int = DEFAULT_RETRY_LEASE_SECONDS,
 ) -> list[RetryAttempt]:
+    """Claim due retries, submit them, and prevent stale workers from finalizing."""
     if limit <= 0:
         raise ValueError(
             "mof needs a positive retry worker limit"

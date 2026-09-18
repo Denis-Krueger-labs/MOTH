@@ -1,3 +1,5 @@
+"""Encrypt, decrypt, and fingerprint flags before they are persisted."""
+
 import base64
 import hashlib
 import hmac
@@ -13,6 +15,7 @@ load_dotenv()
 
 
 def _load_master_key() -> bytes:
+    """Decode and validate the 32-byte database master key from the environment."""
     encoded_key = os.getenv("MOTH_DB_KEY")
 
     if not encoded_key:
@@ -27,6 +30,7 @@ def _load_master_key() -> bytes:
 
 
 def _derive_key(purpose: bytes) -> bytes:
+    """Derive a purpose-specific 256-bit key from the database master key."""
     return HKDF(
         algorithm=hashes.SHA256(),
         length=32,
@@ -35,11 +39,13 @@ def _derive_key(purpose: bytes) -> bytes:
     ).derive(_load_master_key())
 
 
+# Separate derivation purposes prevent one key from serving both encryption and lookup.
 ENCRYPTION_KEY = _derive_key(b"MOTH flag encryption")
 FINGERPRINT_KEY = _derive_key(b"MOTH flag fingerprinting")
 
 
 def encrypt_flag(flag: str) -> tuple[bytes, bytes]:
+    """Encrypt a flag with a fresh AES-GCM nonce for database storage."""
     nonce = os.urandom(12)
 
     aes = AESGCM(ENCRYPTION_KEY)
@@ -53,6 +59,7 @@ def encrypt_flag(flag: str) -> tuple[bytes, bytes]:
 
 
 def decrypt_flag(nonce: bytes, ciphertext: bytes) -> str:
+    """Decrypt an AES-GCM-protected flag read from the database."""
     aes = AESGCM(ENCRYPTION_KEY)
 
     plaintext = aes.decrypt(
@@ -65,6 +72,7 @@ def decrypt_flag(nonce: bytes, ciphertext: bytes) -> str:
 
 
 def fingerprint_flag(flag: str) -> str:
+    """Return a keyed, non-reversible fingerprint for duplicate detection."""
     return hmac.new(
         FINGERPRINT_KEY,
         flag.encode("utf-8"),

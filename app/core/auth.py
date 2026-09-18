@@ -1,3 +1,5 @@
+"""Provide the API-token dependency used to protect MOTH endpoints."""
+
 import hmac
 
 from fastapi import (
@@ -13,6 +15,7 @@ from app.db.events import (
 async def require_api_token(
     request: Request,
 ) -> None:
+    """Reject missing, malformed, or incorrect bearer tokens before route handling."""
     from app.core.config import get_api_token
 
     authorization = request.headers.get(
@@ -84,6 +87,7 @@ async def require_api_token(
             ),
         ) from exc
 
+    # Constant-time comparison prevents token-prefix timing leaks.
     if not hmac.compare_digest(
         token,
         expected_token,

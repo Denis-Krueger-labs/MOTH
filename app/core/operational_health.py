@@ -1,3 +1,5 @@
+"""Build scheduler and game-server connectivity health information."""
+
 import asyncio
 from time import perf_counter
 
@@ -13,6 +15,7 @@ from app.core.config import (
 def get_scheduler_status(
     app: FastAPI,
 ) -> dict[str, object]:
+    """Report the managed retry task's state without awaiting or modifying it."""
     task = getattr(
         app.state,
         "retry_scheduler_task",
@@ -58,6 +61,7 @@ def build_operational_health(
     app: FastAPI,
     stats: dict[str, object],
 ) -> dict[str, object]:
+    """Classify scheduler and retry-queue information for the health dashboard."""
     scheduler = get_scheduler_status(
         app
     )
@@ -110,6 +114,7 @@ def build_operational_health(
 async def probe_submission_server() -> (
     dict[str, object]
 ):
+    """Check greeting reachability without sending a flag to the game server."""
     try:
         host = get_submission_host()
         port = get_submission_port()

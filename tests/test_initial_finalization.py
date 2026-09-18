@@ -1,3 +1,5 @@
+"""Verify atomic initial-claim finalization and event-failure resilience."""
+
 import sqlite3
 
 from app.db import (

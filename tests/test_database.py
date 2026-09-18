@@ -1,3 +1,5 @@
+"""Verify submission persistence, state transitions, and schema migration."""
+
 import sqlite3
 
 from app.db import database

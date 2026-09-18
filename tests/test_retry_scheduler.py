@@ -1,3 +1,5 @@
+"""Verify periodic retry-scheduler execution and configuration validation."""
+
 import asyncio
 
 import pytest

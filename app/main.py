@@ -1,3 +1,5 @@
+"""Configure the FastAPI application and its startup and shutdown lifecycle."""
+
 import asyncio
 from contextlib import asynccontextmanager
 
@@ -20,6 +22,7 @@ from app.db import submission_gate
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    """Initialize persistence and scheduling, then flush pending events on shutdown."""
     database.initialize_database()
     events.initialize_event_history()
 

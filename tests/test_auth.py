@@ -1,3 +1,5 @@
+"""Verify API-token enforcement and authentication event instrumentation."""
+
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 

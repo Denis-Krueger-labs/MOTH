@@ -1,3 +1,5 @@
+"""Verify atomic initial-submission claims, release, and recovery behavior."""
+
 import threading
 from concurrent.futures import (
     ThreadPoolExecutor,

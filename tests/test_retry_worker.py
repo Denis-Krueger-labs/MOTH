@@ -1,3 +1,5 @@
+"""Verify retry-worker claims, outcomes, limits, and fencing behavior."""
+
 import asyncio
 import sqlite3
 

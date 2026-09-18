@@ -1,3 +1,5 @@
+"""Run the background scheduler that periodically processes retryable flags."""
+
 import asyncio
 import logging
 from uuid import uuid4
@@ -13,6 +15,7 @@ DEFAULT_RETRY_BATCH_LIMIT = 100
 
 
 def _new_scheduler_worker_id() -> str:
+    """Create an identity reused across a single scheduler lifetime."""
     return f"scheduler-{uuid4().hex}"
 
 
@@ -23,6 +26,7 @@ async def run_retry_scheduler(
     retry_limit: int = DEFAULT_RETRY_BATCH_LIMIT,
     worker_id: str | None = None,
 ) -> None:
+    """Process retry batches until stopped while surviving recoverable failures."""
     if interval_seconds <= 0:
         raise ValueError(
             "mof needs a positive scheduler interval"

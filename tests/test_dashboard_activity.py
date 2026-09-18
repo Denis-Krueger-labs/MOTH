@@ -1,3 +1,5 @@
+"""Verify dashboard activity metrics and recent-activity endpoint behavior."""
+
 import sqlite3
 
 from fastapi.testclient import TestClient

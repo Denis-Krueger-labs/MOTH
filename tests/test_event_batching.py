@@ -1,3 +1,5 @@
+"""Verify batched event persistence and shutdown flushing behavior."""
+
 import sqlite3
 
 from app.db import database

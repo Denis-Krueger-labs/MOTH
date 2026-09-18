@@ -1,3 +1,5 @@
+"""Build aggregate dashboard statistics from persisted submission data."""
+
 import sqlite3
 from datetime import datetime, timezone
 
@@ -6,12 +8,14 @@ from app.db import events
 
 
 def _utc_now() -> str:
+    """Return a sortable UTC timestamp for retry-queue calculations."""
     return datetime.now(
         timezone.utc
     ).isoformat()
 
 
 def get_dashboard_stats() -> dict[str, object]:
+    """Aggregate submission, retry, lease, and event data for the dashboard."""
     now = _utc_now()
 
     with sqlite3.connect(

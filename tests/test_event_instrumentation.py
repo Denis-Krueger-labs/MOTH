@@ -1,3 +1,5 @@
+"""Verify operational events are emitted for authenticated workflow actions."""
+
 import asyncio
 import sqlite3
 

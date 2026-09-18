@@ -1,3 +1,5 @@
+"""Store and retrieve privacy-safe operational events for the dashboard."""
+
 import logging
 import sqlite3
 import threading
@@ -31,6 +33,8 @@ _BATCHED_EVENTS: dict[
 
 @dataclass(frozen=True, slots=True)
 class SubmissionEvent:
+    """Represent one privacy-safe operational event returned by the dashboard."""
+
     id: int
     event_type: str
     code: str | None
@@ -43,18 +47,21 @@ class SubmissionEvent:
 
 
 def _utc_now() -> str:
+    """Return a sortable UTC timestamp for event persistence."""
     return datetime.now(
         timezone.utc
     ).isoformat()
 
 
 def _database_key() -> str:
+    """Identify the active database so in-memory batches stay environment-local."""
     return str(
         database.DATABASE_PATH
     )
 
 
 def _empty_event_metrics() -> dict[str, int]:
+    """Provide the complete zero-valued metrics shape before the table exists."""
     return {
         "event_count": 0,
         "gameserver_attempts": 0,
@@ -70,6 +77,7 @@ def _empty_event_metrics() -> dict[str, int]:
 
 
 def initialize_event_history() -> None:
+    """Create the event-history schema and apply its additive counter migration."""
     with sqlite3.connect(
         database.DATABASE_PATH
     ) as connection:
@@ -134,6 +142,7 @@ def record_event(
     worker_id: str | None = None,
     event_count: int = 1,
 ) -> int:
+    """Persist one aggregate-safe event without retaining flags, tokens, or messages."""
     event_type = event_type.strip()
 
     if not event_type:
@@ -197,6 +206,7 @@ def record_event_safely(
     worker_id: str | None = None,
     event_count: int = 1,
 ) -> int | None:
+    """Attempt event persistence without allowing telemetry failures to stop a workflow."""
     try:
         return record_event(
             event_type,
@@ -226,6 +236,7 @@ def record_batched_event_safely(
     worker_id: str | None = None,
     batch_size: int = DEFAULT_BATCH_SIZE,
 ) -> int | None:
+    """Accumulate identical low-priority events and persist them in aggregate batches."""
     if batch_size <= 0:
         raise ValueError(
             "mof needs a positive event batch size"
@@ -243,6 +254,7 @@ def record_batched_event_safely(
 
     flush_count = 0
 
+    # Protect the shared counters while keeping database I/O outside the lock.
     with _BATCH_LOCK:
         current = (
             _BATCHED_EVENTS.get(
@@ -303,6 +315,7 @@ def record_batched_event_safely(
 
 
 def flush_batched_events() -> int:
+    """Persist pending events for the active database, restoring any failed flush."""
     database_key = _database_key()
 
     pending: list[
@@ -380,6 +393,7 @@ def flush_batched_events() -> int:
 
 
 def _pending_counts_by_type() -> Counter[str]:
+    """Return unflushed event totals so dashboard metrics include pending work."""
     database_key = _database_key()
 
     counts: Counter[str] = Counter()
@@ -403,6 +417,7 @@ def _pending_counts_by_type() -> Counter[str]:
 def get_recent_events(
     limit: int = 50,
 ) -> list[SubmissionEvent]:
+    """Return newest persisted events while enforcing the dashboard's safe limit."""
     if limit <= 0:
         raise ValueError(
             "mof needs a positive event limit"
@@ -456,6 +471,7 @@ def get_recent_events(
 
 
 def get_event_metrics() -> dict[str, int]:
+    """Aggregate persisted and pending events into the dashboard metrics payload."""
     now = datetime.fromisoformat(
         _utc_now()
     )

@@ -1,3 +1,5 @@
+"""Provide authenticated dashboard statistics, activity, and health endpoints."""
+
 from dataclasses import asdict
 
 from fastapi import (

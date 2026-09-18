@@ -1,3 +1,5 @@
+"""Provide shared pytest fixtures for MOTH's isolated database tests."""
+
 import pytest
 
 from app.db import database

@@ -1,3 +1,5 @@
+"""Verify conversion of game-server responses and failures into outcomes."""
+
 import asyncio
 
 from app.core.submission_service import (

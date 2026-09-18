@@ -1,3 +1,5 @@
+"""Verify bounded parallel batch submission and result ordering."""
+
 import asyncio
 
 from fastapi import FastAPI
