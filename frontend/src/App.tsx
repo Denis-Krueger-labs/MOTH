@@ -610,6 +610,7 @@ function App() {
                       setFlag(event.target.value)
                     }}
                     placeholder="FAUST_..."
+                    aria-label="Flag"
                     autoComplete="off"
                     spellCheck={false}
                     disabled={isSubmitting}
