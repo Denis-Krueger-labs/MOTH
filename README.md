@@ -9,16 +9,16 @@
 ```
 
 > **Multi-Operator Transmission Hub**
-> A flag submission relay for FAUST CTF.
+> A flag submission relay and operator control surface for FAUST CTF.
 
 MOTH exists so exploit authors do not have to carry submission infrastructure inside every exploit.
 
 The intended workflow is deliberately boring:
 
-```text
-exploit finds flag
-→ send flag to MOTH
-→ go back to exploiting
+```mermaid
+flowchart LR
+    A[Exploit finds flag] --> B[Send flag to MOTH]
+    B --> C[Go back to exploiting]
 ```
 
 Mof carries the flags.
@@ -30,7 +30,7 @@ Mof:
 ཐི༏ཋྀ    ཐིཋྀ    ʚïɞ    ᖭི༏ᖫྀ
 
 MORI:
-/•᷅‎‎•᷄\੭
+₍^. .^₎⟆
 ```
 
 ---
@@ -41,14 +41,18 @@ MOTH centralizes the parts of flag submission that should not be reimplemented b
 
 * authenticated flag intake
 * strict FAUST flag validation
+* single and batch submission
 * gameserver protocol handling
 * encrypted persistent state
 * duplicate detection
 * automatic retry scheduling
+* claim and lease fencing
 * concurrency protection
 * bounded overload behavior
 * safe operational telemetry
 * dashboard-facing status data
+* live operator visibility
+* manual operator submission
 
 Exploit code should only need to know where MOTH is and how to authenticate to it.
 
@@ -56,54 +60,92 @@ Exploit code should only need to know where MOTH is and how to authenticate to i
 
 ## Current project state
 
-The core backend is implemented and under competition hardening.
+The backend and operator control surface are implemented.
 
-Current work focuses on:
+The current private development state includes:
 
-* stress testing
-* failure-mode rehearsal
-* deployment design
-* operational runbooks
-* frontend development
+* FastAPI submission API
+* encrypted SQLite persistence
+* duplicate and same-flag race protection
+* bounded initial-submission capacity
+* retry scheduling with persistent leases and fencing
+* batch submission
+* operational telemetry
+* dashboard health, statistics, recent activity, and connectivity endpoints
+* React + TypeScript + Vite operator frontend
+* live self-scheduling dashboard polling
+* manual flag offering from the control surface
+* backend automated tests
+* frontend Vitest + React Testing Library coverage
+* local race, stress, outage, and recovery tooling
+* benchmark and limitation documentation
 
-The backend has been exercised against local race, concurrency, authentication-flood, batch, persistence, retry, and gameserver-failure scenarios.
+The project has been exercised against local race, concurrency, authentication-flood, batch, persistence, retry, gameserver-failure, dashboard-load, and recovery scenarios.
+
+Current measurements describe the local development environment only. They are evidence for design decisions, not production-capacity guarantees.
 
 ---
 
 ## System overview
 
+The local development shape is:
+
 ```mermaid
 flowchart LR
-    A[Exploit Scripts] --> B[MOTH API]
-    C[Operators] --> B
-    D[Future Dashboard] --> B
+    EXPLOIT[Exploit Scripts] -->|Bearer token| API[MOTH FastAPI]
 
-    B --> E[Submission Control]
-    E --> F[FAUST Gameserver]
-    E --> G[(Persistent State)]
+    OPERATOR[Operator Browser] --> VITE[Vite Dev Server]
+    VITE -->|/api proxy + server-side Bearer injection| API
 
-    G --> H[Retry Scheduler]
-    H --> E
+    API --> CONTROL[Submission Control]
+    CONTROL --> GAME[FAUST Gameserver]
+    CONTROL --> STATE[(Encrypted Persistent State)]
 
-    G --> I[Operational Data]
-    I --> D
+    STATE --> RETRY[Retry Scheduler]
+    RETRY --> CONTROL
+
+    STATE --> TELEMETRY[Operational Data]
+    TELEMETRY --> API
+    API --> VITE
 ```
 
-This diagram is intentionally high level.
+The Vite authentication proxy is a **local development boundary**. It keeps `MOTH_API_TOKEN` on the server side instead of exposing it as a `VITE_*` browser variable.
 
-The detailed request lifecycle, database model, concurrency controls, retry fencing, telemetry model, and hardening rationale live in [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md).
+It is not the final competition transport or secret-distribution design.
+
+The detailed request lifecycle, database model, concurrency controls, retry fencing, telemetry model, frontend boundary, and hardening rationale live in [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md).
 
 ---
 
 ## API surfaces
 
-MOTH currently exposes three groups of HTTP functionality:
+MOTH exposes four operational groups:
 
 * single and batch flag submission
-* application and operational health
-* dashboard statistics and recent activity
+* basic application health
+* dashboard statistics, recent activity, and operational health
+* explicit gameserver connectivity probing
 
-The exact routes, payloads, response handling, PowerShell commands, exploit examples, and troubleshooting steps belong in [`docs/USAGE.md`](docs/USAGE.md).
+The exact routes, payloads, response handling, PowerShell commands, frontend startup, exploit examples, and troubleshooting steps live in [`docs/USAGE.md`](docs/USAGE.md).
+
+---
+
+## Operator frontend
+
+The control surface is implemented in React + TypeScript with Vite.
+
+It provides:
+
+* live MOTH health
+* scheduler and retry-queue state
+* submission statistics
+* gameserver reachability
+* recent operational activity
+* manual flag submission
+
+Polling is self-scheduling rather than a blind overlapping interval. Health, statistics, and recent activity refresh on the normal cycle, while the more expensive live gameserver connectivity probe is sampled less frequently.
+
+Frontend architecture and visual behavior live in [`docs/FRONTEND.md`](docs/FRONTEND.md).
 
 ---
 
@@ -111,41 +153,40 @@ The exact routes, payloads, response handling, PowerShell commands, exploit exam
 
 MOTH is designed to reduce accidental flag loss, duplicate submission, stale-worker corruption, and uncontrolled load.
 
-It also avoids treating telemetry as another flag store.
+Operational event data is intentionally separated from sensitive flag material. Stored flags are protected using application-level encryption and keyed fingerprints.
 
-Operational event data is intentionally separated from sensitive flag material, and stored flags are protected using application-level encryption and keyed fingerprints.
+The normal dashboard does not need plaintext flags.
 
-MOTH does **not** replace host security, transport protection, secret management, or deployment isolation.
+MOTH does **not** replace:
 
-Those deployment boundaries are documented in [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) and the competition runbook in [`docs/USAGE.md`](docs/USAGE.md).
+* host security
+* transport protection
+* secret management
+* deployment isolation
+* reverse-proxy limits
+* competition network policy
+
+Bearer authentication is not transport encryption.
+
+Known deployment and implementation boundaries are tracked in [`docs/CURRENT_LIMITATIONS.md`](docs/CURRENT_LIMITATIONS.md).
 
 ---
 
-## Repository layout
+## Repository orientation
 
-```text
-MOTH/
-├── app/
-│   ├── api/
-│   ├── core/
-│   └── db/
-├── docs/
-│   ├── ARCHITECTURE.md
-│   └── USAGE.md
-├── tests/
-├── tools/
-└── README.md
-```
+The repository is organized around these main areas:
 
-The source tree is organized around three backend concerns:
+| Path | Purpose |
+| --- | --- |
+| `app/api/` | HTTP routes and response shaping |
+| `app/core/` | auth, submission, retry, scheduling, networking, capacity |
+| `app/db/` | persistent state, claims, events, dashboard queries |
+| `frontend/` | React + TypeScript operator control surface |
+| `tests/` | backend regression tests |
+| `tools/` | fake gameserver, race tools, stress tools |
+| `docs/` | architecture, usage, frontend, benchmarks, limitations |
 
-```text
-api   → HTTP surfaces
-core  → submission, retry, scheduling, auth, networking
-db    → persistent state, claims, events, dashboard queries
-```
-
-Local stress and fake-gameserver utilities live under `tools/`.
+The frontend contains its own automated tests and build tooling.
 
 ---
 
@@ -156,7 +197,7 @@ Local stress and fake-gameserver utilities live under `tools/`.
 Use this file for:
 
 * project purpose
-* current status
+* current state
 * high-level system shape
 * repository orientation
 
@@ -165,14 +206,15 @@ Use this file for:
 Use the architecture document for:
 
 * technical invariants
+* component boundaries
 * request lifecycle
 * submission claims
 * retry leases and fencing
 * atomic finalization
 * persistence design
 * telemetry design
+* frontend/backend boundaries
 * SQLite concurrency model
-* hardening evidence
 * security boundaries
 
 ### `docs/USAGE.md`
@@ -183,13 +225,65 @@ Use the team guide for:
 * configuration
 * API calls
 * exploit integration
+* frontend startup
 * dashboard access
+* automated tests
 * stress tools
 * competition startup
 * troubleshooting
 * Git workflow
 
-The goal is that each subject has one authoritative home instead of three slightly different explanations.
+### `docs/FRONTEND.md`
+
+Use the frontend document for:
+
+* control-surface structure
+* Vite development proxy behavior
+* polling behavior
+* component responsibilities
+* visual design rules
+
+### `docs/BENCHMARKS.md`
+
+Use the benchmark document for:
+
+* measured local load tests
+* race results
+* outage and recovery observations
+* dashboard behavior under pressure
+* exact test conditions and limitations
+
+### `docs/CURRENT_LIMITATIONS.md`
+
+Use the limitations document for:
+
+* known deployment assumptions
+* current scaling boundaries
+* remaining operational decisions
+* intentionally unfinished production concerns
+
+The goal is that each subject has one authoritative home instead of several slightly different explanations.
+
+---
+
+## Development verification
+
+Backend:
+
+```powershell
+pytest
+```
+
+Frontend:
+
+```powershell
+cd .\frontend
+npm test
+npm run build
+cd ..
+```
+
+For concurrency and failure-sensitive behavior, automated tests are supplemented by the local race, stress, and fake-gameserver tools documented in [`docs/USAGE.md`](docs/USAGE.md).
 
 ---
 
@@ -209,11 +303,15 @@ A useful rule for the backend is:
 
 > Every expensive or state-changing action should have one clear owner.
 
+A useful rule for the operator frontend is:
+
+> Show operational truth without becoming another secret store.
+
 ---
 
-## Frontend direction
+## Control-surface direction
 
-The future operator frontend should remain operational first and decorative second.
+The operator frontend stays operational first and decorative second.
 
 Visual direction:
 
@@ -222,8 +320,11 @@ Visual direction:
 * Mof
 * MORI
 * cybersigilism
+* terminal workstation
 * clear system state
 * unnecessary amounts of moth
+
+No secrets belong in the browser bundle.
 
 ---
 
@@ -232,13 +333,13 @@ Visual direction:
 ```mermaid
 flowchart LR
     A[Find Flag] --> B[Send to MOTH]
-    B --> C[MOTH Handles Submission State]
+    B --> C[MOTH Owns Submission State]
     C --> D[Gameserver]
     C --> E[Retry if Needed]
     C --> F[Operator Visibility]
 ```
 
-During competition, exploit authors should only care about the first two boxes.
+During competition, exploit authors should mostly care about the first two steps.
 
 MOTH handles the rest.
 
@@ -253,7 +354,7 @@ MOTH handles the rest.
 Mof carries the flags.
 
 ```text
-/•᷅‎‎•᷄\੭
+₍^. .^₎⟆
 ```
 
 MORI guards the nest.

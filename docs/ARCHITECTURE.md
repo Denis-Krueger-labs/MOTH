@@ -6,7 +6,7 @@
 ཐི༏ཋྀ
 Mof moves the flags.
 
-/•᷅‎‎•᷄\੭
+₍^. .^₎⟆
 MORI decides who owns the state.
 ```
 
@@ -24,11 +24,15 @@ It is the authoritative home for:
 * concurrency controls
 * retry coordination
 * telemetry design
+* frontend/backend boundaries
+* development authentication boundaries
 * SQLite transaction choices
 * security boundaries
-* hardening evidence
+* hardening rationale
 
 It intentionally does **not** contain operator commands, PowerShell walkthroughs, Git procedures, or competition checklists. Those belong in `docs/USAGE.md`.
+
+Frontend-specific composition and visual rules live in `docs/FRONTEND.md`. Measured local load results live in `docs/BENCHMARKS.md`. Known deployment and implementation boundaries live in `docs/CURRENT_LIMITATIONS.md`.
 
 ---
 
@@ -66,30 +70,35 @@ Failure to record operational telemetry must not destroy valid flag state.
 
 ## 3. Component boundaries
 
-```text
-app/
-├── api/
-│   ├── flags.py
-│   ├── dashboard.py
-│   └── health.py
-├── core/
-│   ├── auth.py
-│   ├── config.py
-│   ├── crypto.py
-│   ├── submitter.py
-│   ├── submission_service.py
-│   ├── submission_capacity.py
-│   ├── retry.py
-│   ├── scheduler.py
-│   └── operational_health.py
-└── db/
-    ├── database.py
-    ├── submission_gate.py
-    ├── events.py
-    └── dashboard.py
+The system is split into a browser-facing control surface, a development proxy boundary, and backend layers with deliberately narrow responsibilities.
+
+```mermaid
+flowchart LR
+    subgraph FRONTEND[frontend]
+        UI[React Components]
+        CLIENT[Dashboard API Client]
+        TESTS[Vitest + React Testing Library]
+        UI --> CLIENT
+        TESTS -. verifies .-> UI
+    end
+
+    subgraph DEV[Vite Development Boundary]
+        PROXY[Vite /api Proxy]
+    end
+
+    subgraph BACKEND[app]
+        API[api]
+        CORE[core]
+        DB[db]
+        API --> CORE
+        CORE --> DB
+    end
+
+    CLIENT -->|/api/*| PROXY
+    PROXY -->|Inject Bearer token| API
 ```
 
-Responsibilities are intentionally split:
+Backend responsibilities are intentionally split:
 
 | Layer | Responsibility |
 | --- | --- |
@@ -97,7 +106,18 @@ Responsibilities are intentionally split:
 | `core` | auth, network submission, result classification, scheduling, capacity |
 | `db` | persistent state, claims, leases, events, dashboard queries |
 
+Frontend responsibilities are intentionally split as well:
+
+| Area | Responsibility |
+| --- | --- |
+| React components | operator presentation and interaction |
+| `src/api/` | typed HTTP access to dashboard and submission routes |
+| Vite development proxy | local `/api` forwarding and server-side bearer injection |
+| frontend tests | deterministic UI, polling, submission, and rendering regressions |
+
 The API layer should not reimplement gameserver protocol behavior or retry state transitions.
+
+The browser must not receive `MOTH_API_TOKEN` through a `VITE_*` environment variable. The current Vite proxy is a development convenience, not the final competition secret-distribution model.
 
 ---
 
@@ -105,7 +125,11 @@ The API layer should not reimplement gameserver protocol behavior or retry state
 
 ```mermaid
 flowchart TD
-    CLIENT[Client] --> AUTH[Authentication]
+    EXPLOIT[Exploit Client] -->|Bearer token| AUTH[Authentication]
+
+    BROWSER[Operator Browser] --> VITE[Vite Dev Server]
+    VITE -->|/api proxy + Bearer injection| AUTH
+
     AUTH --> VALIDATE[Flag Validation]
     VALIDATE --> CLAIM[Initial Claim]
 
@@ -126,6 +150,10 @@ flowchart TD
     FLAGS --> RETRY[Retry Scheduler]
     RETRY --> LEASE[Retry Lease + Fencing]
     LEASE --> SERVICE
+
+    FLAGS --> DASH[Dashboard Queries]
+    EVENTS --> DASH
+    DASH --> AUTH
 ```
 
 ---
@@ -160,33 +188,14 @@ It does not protect against a host or process that already has access to the act
 
 The persistent flag table carries submission state, encrypted flag material, metadata, retry state, and retry lease state.
 
-Conceptually it contains:
+Conceptually it groups fields by responsibility:
 
-```text
-identity
-├── flag_ciphertext
-├── flag_nonce
-└── flag_fingerprint
-
-submission state
-├── submission_state
-├── response_code
-├── response_message
-├── service
-└── source
-
-time
-├── created_at
-├── updated_at
-└── last_attempt_at
-
-retry
-├── retry_count
-├── next_retry_at
-├── lease_owner
-├── lease_until
-└── lease_token
-```
+| Group | Fields |
+| --- | --- |
+| identity | `flag_ciphertext`, `flag_nonce`, `flag_fingerprint` |
+| submission state | `submission_state`, `response_code`, `response_message`, `service`, `source` |
+| time | `created_at`, `updated_at`, `last_attempt_at` |
+| retry | `retry_count`, `next_retry_at`, `lease_owner`, `lease_until`, `lease_token` |
 
 ### `initial_submission_claims`
 
@@ -227,11 +236,13 @@ The event table intentionally does not need plaintext flag material.
 
 A naive flow is unsafe:
 
-```text
-check whether flag exists
-→ submit
-→ record result
+```mermaid
+flowchart LR
+    CHECK[Check whether flag exists] --> SEND[Submit]
+    SEND --> RECORD[Record result]
 ```
+
+The problem is the gap between `CHECK` and `RECORD`.
 
 Concurrent callers can all observe the same flag as absent before any one of them records it.
 
@@ -271,20 +282,13 @@ The important semantic is that the timestamp is used to decide whether another c
 
 Therefore:
 
-```text
-claim expires
-nobody reclaims it
-→ original token is still current
-→ original worker may still finalize
-```
-
-but:
-
-```text
-claim expires
-another worker reclaims it
-→ token changes
-→ old result cannot finalize
+```mermaid
+flowchart TD
+    EXPIRE[Claim expires] --> RECLAIM{Was it reclaimed?}
+    RECLAIM -->|No| CURRENT[Original token remains current]
+    CURRENT --> FINALIZE[Original worker may still finalize]
+    RECLAIM -->|Yes| TOKEN[Claim token changes]
+    TOKEN --> REJECT[Old result cannot finalize]
 ```
 
 This preserves useful slow responses without allowing stale results to overwrite newer ownership.
@@ -385,10 +389,10 @@ Retryable records remain under scheduler control.
 
 The initial design finalized one submission through multiple independent writes:
 
-```text
-record flag
-record event
-release initial claim
+```mermaid
+flowchart LR
+    A[Record flag] --> B[Record event]
+    B --> C[Release initial claim]
 ```
 
 That increased write-lock churn and created more intermediate states.
@@ -568,6 +572,37 @@ The dashboard backend separates two kinds of observation:
 
 The connectivity probe is intentionally separate so routine dashboard polling does not repeatedly open gameserver connections.
 
+The React control surface consumes the same authenticated API rather than reading the database directly.
+
+Its development polling model is intentionally staggered:
+
+* health, statistics, and recent activity use the normal refresh cycle
+* gameserver connectivity is sampled less frequently
+* a new polling cycle is scheduled only after the previous cycle settles
+* manual submission triggers an immediate refresh of the relevant dashboard state
+
+The current development cadence is approximately two seconds for health, statistics, and recent activity, with connectivity sampled every third cycle.
+
+```mermaid
+sequenceDiagram
+    participant UI as React control surface
+    participant Vite as Vite dev proxy
+    participant API as FastAPI
+    participant Game as Gameserver
+
+    UI->>Vite: health + stats + recent
+    Vite->>API: authenticated /api requests
+    API-->>Vite: operational state
+    Vite-->>UI: operational state
+
+    Note over UI: every third polling cycle
+    UI->>Vite: connectivity
+    Vite->>API: authenticated probe request
+    API->>Game: open connection and read greeting
+    Game-->>API: greeting or failure
+    API-->>UI: connectivity result
+```
+
 ---
 
 ## 22. SQLite concurrency model
@@ -657,6 +692,8 @@ Network placement and transport protection remain deployment responsibilities.
 
 Local stress measurements are used to validate design choices rather than to advertise production capacity.
 
+The canonical record of current end-to-end measurements is `docs/BENCHMARKS.md`. The samples below are retained as design-history evidence for specific hardening changes.
+
 ### Same-flag race
 
 Before initial ownership control:
@@ -732,17 +769,30 @@ These measurements describe one local development environment only.
 
 Automated tests cover deterministic behavior and regression boundaries.
 
+Backend tests use `pytest`.
+
+Frontend tests use Vitest with React Testing Library and cover operator-visible behavior such as:
+
+* initial dashboard state
+* manual flag submission
+* local rejection of an empty offering
+* state refresh after submission
+* continued polling
+* gameserver failure rendering without losing unrelated state
+
 Manual local tests remain important for:
 
 * real TCP behavior
+* browser behavior against the live backend
 * race conditions
 * concurrency limits
 * slow gameserver behavior
 * unavailable gameserver behavior
+* recovery after gameserver outage
 * database growth
 * outbound traffic amplification
 
-Concurrency-sensitive behavior is not considered validated solely because unit tests are green.
+Concurrency-sensitive behavior is not considered validated solely because automated tests are green.
 
 The concrete commands live in `docs/USAGE.md`.
 
@@ -764,6 +814,8 @@ Final deployment design must explicitly choose:
 * backup policy
 
 These are deployment decisions rather than hidden application assumptions.
+
+The Vite development server and its bearer-injecting proxy are not, by themselves, the competition deployment design. Final deployment must explicitly decide how the operator frontend is served, how browser-to-MOTH traffic is protected, and where authentication credentials are allowed to exist.
 
 ---
 
@@ -794,5 +846,5 @@ The repeated pattern is ownership before expensive work and fencing before state
 ```text
 ཐི༏ཋྀ
 
-/•᷅‎‎•᷄\੭
+₍^. .^₎⟆
 ```

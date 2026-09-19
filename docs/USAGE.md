@@ -6,8 +6,14 @@ It may contain operational details that should not be copied into the public Git
 
 For implementation details and concurrency rationale, use `docs/ARCHITECTURE.md`.
 
+For frontend structure and visual behavior, use `docs/FRONTEND.md`.
+
+For measured load results, use `docs/BENCHMARKS.md`.
+
+For known boundaries and deployment gaps, use `docs/CURRENT_LIMITATIONS.md`.
+
 ```text
-/•᷅‎‎•᷄\੭
+₍^. .^₎⟆
 MORI checks you first.
 
 ཐི༏ཋྀ
@@ -18,16 +24,25 @@ Then Mof takes the flag.
 
 ## Quick start
 
-Activate the virtual environment:
+Activate the Python virtual environment from the repository root:
 
 ```powershell
 .\.venv\Scripts\Activate.ps1
 ```
 
-Run the test suite before operational changes:
+Run the backend tests before operational changes:
 
 ```powershell
-pytest -q
+pytest
+```
+
+Run the frontend tests and production build check:
+
+```powershell
+cd .\frontend
+npm test
+npm run build
+cd ..
 ```
 
 Start MOTH for local development:
@@ -42,7 +57,26 @@ For quieter local stress testing:
 uvicorn app.main:app --no-access-log --log-level warning
 ```
 
-Do not use development reload mode for final competition deployment unless that choice is intentional.
+Start the frontend in a separate terminal:
+
+```powershell
+cd .\frontend
+npm run dev
+```
+
+The development dashboard is then served by Vite, normally at:
+
+```text
+http://localhost:5173
+```
+
+For a full local end-to-end session, use separate terminals for:
+
+1. the fake gameserver when needed
+2. the FastAPI backend
+3. the Vite frontend
+
+Do not use development reload mode or the Vite development server for final competition deployment unless that choice is intentional and reviewed.
 
 ---
 
@@ -79,6 +113,24 @@ MOTH_SUBMISSION_TIMEOUT=5.0
 ```
 
 Competition values belong in the deployment environment.
+
+### Frontend development configuration
+
+The Vite development server reads the repository-root environment configuration and requires `MOTH_API_TOKEN` so it can authenticate proxied `/api` requests to FastAPI.
+
+The token is injected **server-side by the Vite proxy**.
+
+Do not rename it to a `VITE_*` variable. Variables with that prefix are exposed to browser code by Vite.
+
+The current local development path is:
+
+```mermaid
+flowchart LR
+    BROWSER[Browser] -->|/api/*| VITE[Vite dev server]
+    VITE -->|Inject Authorization: Bearer token| API[FastAPI]
+```
+
+This is a development convenience, not the final competition secret-distribution model.
 
 ---
 
@@ -122,6 +174,20 @@ Expected authentication failures:
 | server has no API token configured | 503 |
 
 MORI fails closed.
+
+### Browser dashboard authentication in development
+
+The React application does not embed `MOTH_API_TOKEN` into the browser bundle.
+
+For local development:
+
+1. the browser requests `/api/...` from Vite
+2. Vite forwards the request to FastAPI
+3. Vite adds `Authorization: Bearer <MOTH_API_TOKEN>` on the server side
+
+Direct exploit scripts and manual API clients still send their own bearer token.
+
+Do not treat this Vite proxy arrangement as a production authentication architecture.
 
 ---
 
@@ -385,6 +451,43 @@ FAUST_AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA
 
 Dashboard routes use the same bearer token.
 
+### Browser control surface
+
+Start the backend and then the Vite frontend:
+
+```powershell
+uvicorn app.main:app --reload
+```
+
+In another terminal:
+
+```powershell
+cd .\frontend
+npm run dev
+```
+
+Open the Vite URL shown in the terminal, normally:
+
+```text
+http://localhost:5173
+```
+
+The control surface shows:
+
+* MOTH API health
+* scheduler state
+* retry-queue state
+* submission statistics
+* gameserver connectivity
+* recent operational activity
+* manual flag offering
+
+Health, statistics, and recent activity refresh automatically. Gameserver connectivity is sampled less frequently so routine UI polling does not open a TCP probe on every refresh.
+
+Manual submission through the dashboard uses `source=dashboard-manual`.
+
+### Direct dashboard API access
+
 ### Statistics
 
 ```http
@@ -448,6 +551,41 @@ Typical local response:
   "moth": "awake"
 }
 ```
+
+---
+
+## Frontend tests
+
+The frontend uses Vitest with React Testing Library.
+
+Run the suite from `frontend/`:
+
+```powershell
+npm test
+```
+
+Watch mode is available during development:
+
+```powershell
+npm run test:watch
+```
+
+The automated frontend coverage checks behavior such as:
+
+* initial operational state rendering
+* manual submission
+* rejection of an empty manual offering
+* post-submission refresh
+* continued polling
+* gameserver-down rendering
+
+Then verify the production build:
+
+```powershell
+npm run build
+```
+
+Frontend tests do not replace the live browser, outage, and recovery rehearsals.
 
 ---
 
@@ -594,6 +732,12 @@ TODO
 Transport:
 TODO
 
+Frontend serving method:
+TODO
+
+Browser-to-MOTH authentication boundary:
+TODO
+
 Application process count:
 TODO
 
@@ -641,7 +785,9 @@ Requirements:
 [ ] Correct private branch checked out
 [ ] Working tree clean
 [ ] Latest TTZ changes pulled
-[ ] Test suite passing
+[ ] Backend test suite passing
+[ ] Frontend test suite passing
+[ ] Frontend production build succeeds
 [ ] MOTH_DB_KEY configured
 [ ] MOTH_API_TOKEN configured
 [ ] Submission host configured
@@ -653,6 +799,7 @@ Requirements:
 [ ] Basic health checked
 [ ] Authentication checked
 [ ] Dashboard health checked
+[ ] Frontend control surface checked if deployed
 [ ] Gameserver connectivity checked
 [ ] Database writable
 [ ] Retry scheduler running
@@ -768,6 +915,30 @@ Check:
 
 Do not respond by blindly increasing concurrency.
 
+### Frontend loads but API data does not
+
+Check:
+
+* FastAPI is running on the expected local port
+* the Vite proxy target matches the backend
+* the repository-root environment contains `MOTH_API_TOKEN`
+* the backend is using the same token
+* the token was not moved into a `VITE_*` variable
+* the browser is using the Vite development URL rather than bypassing the configured proxy
+
+### Frontend tests fail
+
+Run the failing test directly through Vitest output and fix the assertion or behavior that actually failed.
+
+Prefer semantic queries such as labels, roles, and scoped elements over assertions that depend on incidental duplicated text.
+
+After a test fix, rerun:
+
+```powershell
+npm test
+npm run build
+```
+
 ---
 
 ## Logs and sensitive data
@@ -829,10 +1000,25 @@ git status
 git pull
 ```
 
-After changes:
+After backend or shared changes:
 
 ```powershell
-pytest -q
+pytest
+```
+
+After frontend changes:
+
+```powershell
+cd .\frontend
+npm test
+npm run build
+cd ..
+```
+
+Then inspect the repository:
+
+```powershell
+git diff --check
 git status
 ```
 
@@ -884,7 +1070,7 @@ Possible sanitized material includes:
 * deployment retrospective
 
 ```text
-/•᷅‎‎•᷄\੭
+₍^. .^₎⟆
 
 MORI says:
 review before publishing.

@@ -236,22 +236,33 @@ A formal compatibility matrix has not yet been recorded for:
 
 The CSS includes responsive behavior and reduced-motion handling, but a complete browser matrix is still pending.
 
-## No Automated Frontend Test Suite Yet
+## Frontend Automated Coverage Is Still Initial
 
-The backend currently has an extensive pytest suite.
+The frontend now has an automated Vitest + React Testing Library suite.
 
-The frontend has been validated manually and through live integration / chaos testing, but a dedicated automated frontend suite is not yet recorded.
+The current suite contains 9 tests across 2 test files and covers:
 
-Potential future coverage:
+- initial dashboard state rendering
+- manual flag submission
+- local rejection of an empty manual offering
+- dashboard refresh after submission
+- continued polling after the initial load
+- gameserver failure rendering without losing unrelated dashboard state
+- recent activity rendering
+- activity-terminal error rendering
+- empty activity-terminal rendering
 
-- component rendering
-- API error states
-- polling cleanup
-- stale response handling
-- manual submission state
-- accessibility
-- responsive layout
-- terminal rendering
+The frontend has also been exercised manually during live polling, gameserver outage, retry recovery, and submission stress.
+
+Coverage is still intentionally small. Areas not yet formally covered include:
+
+- polling cleanup during component unmount
+- stale or out-of-order response handling
+- broader API error combinations
+- accessibility beyond the currently exercised semantic selectors
+- responsive layout behavior
+- formal browser compatibility
+- long-duration frontend soak behavior
 
 ## Security Scope
 
