@@ -1,7 +1,7 @@
 # MOTH
 
 **Multi-Operator Transmission Hub**
-
+(internally done will be posted once Faust is over)
 ```text
 ཐི༏ཋྀ    ཐིཋྀ    ʚïɞ    ᖭི༏ᖫྀ
 
